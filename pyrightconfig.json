@@ -1,0 +1,8 @@
+{
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": false,
+  "typeCheckingMode": "basic"
+}
+
+
+
