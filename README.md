@@ -31,8 +31,6 @@ pip install medeval[dev]
 ```python
 import torch
 from medeval.core import compute_metric
-
-# Your evaluation code here
 ```
 
 ## License
