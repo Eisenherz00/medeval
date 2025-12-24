@@ -38,3 +38,4 @@ from medeval.core import compute_metric
 Apache-2.0
 
 # test acc1
+# test acc2
