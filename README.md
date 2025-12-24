@@ -36,7 +36,3 @@ from medeval.core import compute_metric
 ## License
 
 Apache-2.0
-
-# test acc1
-# test acc2
-# test acc3
