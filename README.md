@@ -30,7 +30,14 @@ pip install medeval[dev]
 
 ```python
 import torch
-from medeval.core import compute_metric
+from medeval.core import load_nifti, aggregate_metrics
+
+# Load image with spacing awareness
+image = load_nifti("path/to/image.nii.gz", as_torch=TRUE, device="cpu")
+
+# Aggregate metrics with confidence intervals
+metrics = {"dice": torch.rand(100) * 0.5 + 0.5}
+results = aggregate_metrics(metrics, compute_ci = True)
 ```
 
 ## License
