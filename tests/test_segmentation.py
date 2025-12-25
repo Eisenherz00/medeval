@@ -157,18 +157,19 @@ class TestSurfaceMetrics:
         """Acceptance test: HD on toy mask with known distance."""
         # Create two squares with known distance
         pred = np.zeros((20, 20), dtype=np.float32)
-        pred[5:10, 5:10] = 1.0  # Square at (5,5) to (10,10)
+        pred[5:10, 5:10] = 1.0  # Square at indices [5,9] in both dims
 
         target = np.zeros((20, 20), dtype=np.float32)
-        target[15:20, 15:20] = 1.0  # Square at (15,15) to (20,20)
+        target[15:20, 15:20] = 1.0  # Square at indices [15,19] in both dims
 
-        # Distance between closest corners: (10,10) to (15,15) = sqrt(50) ≈ 7.07
+        # Hausdorff distance is MAX of min distances from surface points
+        # Furthest pred point (5,5) to nearest target (15,15) = sqrt((15-5)^2 + (15-5)^2) = sqrt(200) ≈ 14.14
         pred_tensor = torch.from_numpy(pred).unsqueeze(0)
         target_tensor = torch.from_numpy(target).unsqueeze(0)
 
         hd = hausdorff_distance(pred_tensor, target_tensor, reduction="none")
-        # Should be approximately sqrt(50) ≈ 7.07
-        assert 7.0 < hd.item() < 7.5
+        # Should be approximately sqrt(200) ≈ 14.14
+        assert 14.0 < hd.item() < 14.5
 
     @pytest.mark.acceptance
     def test_hausdorff_distance_spacing_aware(self):
@@ -179,14 +180,15 @@ class TestSurfaceMetrics:
         target = np.zeros((20, 20), dtype=np.float32)
         target[15:20, 15:20] = 1.0
 
-        # With spacing (2.0, 2.0), physical distance should be doubled
+        # With spacing (2.0, 2.0), physical distance is computed with scaled coords
+        # Physical HD = sqrt((2*10)^2 + (2*10)^2) = sqrt(800) ≈ 28.28
         spacing = (2.0, 2.0)
         pred_tensor = torch.from_numpy(pred).unsqueeze(0)
         target_tensor = torch.from_numpy(target).unsqueeze(0)
 
         hd = hausdorff_distance(pred_tensor, target_tensor, spacing=spacing, reduction="none")
-        # Physical distance ≈ sqrt(50) * 2 ≈ 14.14
-        assert 14.0 < hd.item() < 14.5
+        # Physical distance ≈ sqrt(800) ≈ 28.28
+        assert 28.0 < hd.item() < 29.0
 
     def test_hausdorff_distance_95(self):
         """Test HD95 (95th percentile Hausdorff distance)."""

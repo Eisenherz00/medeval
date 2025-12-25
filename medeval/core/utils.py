@@ -35,7 +35,7 @@ def apply_spacing(
         Physical coordinates, same shape as coords
     """
     coords = as_tensor(coords, device=device)
-    spacing_tensor = as_tensor(spacing, dtype=torch.float32, device=coords.device)
+    spacing_tensor = as_tensor(list(spacing), dtype=torch.float32, device=coords.device)
 
     spatial_dims = coords.shape[-1]
     if len(spacing) != spatial_dims:
@@ -230,3 +230,103 @@ def reduce_metrics(
         return _reduce_global(metrics)
 
     raise ValueError(f"Unknown reduction type: {reduction}")
+
+
+def label_mapping(
+    labels: Tensor,
+    mapping: dict[int, int],
+    ignore_index: Optional[int] = None,
+) -> Tensor:
+    """Map label values according to a dictionary mapping.
+
+    Parameters
+    ----------
+    labels : Tensor
+        Input labels to map
+    mapping : dict[int, int]
+        Dictionary mapping old label values to new values
+    ignore_index : int, optional
+        Label value to ignore (preserved as-is)
+
+    Returns
+    -------
+    Tensor
+        Mapped labels with same shape as input
+    """
+    labels = as_tensor(labels)
+    mapped = labels.clone()
+
+    for old_val, new_val in mapping.items():
+        mask = labels == old_val
+        if ignore_index is not None:
+            mask = mask & (labels != ignore_index)
+        mapped[mask] = new_val
+
+    return mapped
+
+
+def compute_one_hot(labels: Tensor, num_classes: int) -> Tensor:
+    """Convert integer labels to one-hot encoding.
+
+    Parameters
+    ----------
+    labels : Tensor
+        Integer labels, shape (...,)
+    num_classes : int
+        Number of classes
+
+    Returns
+    -------
+    Tensor
+        One-hot encoded labels, shape (..., num_classes)
+    """
+    labels = as_tensor(labels, dtype=torch.long)
+    shape = labels.shape
+    one_hot = torch.zeros(*shape, num_classes, dtype=torch.float32, device=labels.device)
+    one_hot.scatter_(-1, labels.unsqueeze(-1), 1.0)
+    return one_hot
+
+
+def compute_weights(
+    labels: Tensor,
+    method: Literal["uniform", "inverse_freq"] = "uniform",
+) -> Tensor:
+    """Compute sample weights based on label distribution.
+
+    Parameters
+    ----------
+    labels : Tensor
+        Integer labels, shape (...,)
+    method : {"uniform", "inverse_freq"}
+        Weight computation method:
+        - "uniform": All samples have equal weight (1.0)
+        - "inverse_freq": Weight inversely proportional to class frequency
+
+    Returns
+    -------
+    Tensor
+        Sample weights, same shape as labels
+    """
+    labels = as_tensor(labels, dtype=torch.long)
+
+    if method == "uniform":
+        return torch.ones_like(labels, dtype=torch.float32)
+
+    if method == "inverse_freq":
+        # Flatten to compute frequencies
+        labels_flat = labels.flatten()
+        unique_labels, counts = torch.unique(labels_flat, return_counts=True)
+        total = labels_flat.numel()
+
+        # Compute inverse frequency weights
+        freq_weights = total / (len(unique_labels) * counts.float())
+        weight_map = torch.zeros(
+            labels_flat.max().item() + 1, dtype=torch.float32, device=labels.device
+        )
+        weight_map[unique_labels] = freq_weights
+
+        # Map weights back to original shape
+        weights = weight_map[labels]
+        return weights
+
+    raise ValueError(f"Unknown weight method: {method}")

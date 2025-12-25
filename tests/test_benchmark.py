@@ -33,10 +33,8 @@ def test_10k_case_benchmark():
     """
     n_cases = 10000
     n_classes = 5
-    spatial_shape = (32, 32, 32)  # Small 3D volumes to keep memory reasonable
 
-    # Simulate metrics for 10k cases
-    # Instead of storing all data, we'll process in chunks
+    # Simulate metrics for 10k cases - process in chunks to limit memory
     chunk_size = 1000
     all_metrics = []
 
@@ -48,18 +46,19 @@ def test_10k_case_benchmark():
         # Shape: (chunk_size, n_classes)
         chunk_metrics = torch.rand(chunk_size_actual, n_classes)
 
-        # Reduce per case
-        reduced = reduce_metrics(chunk_metrics, reduction="mean-case", per_class=False)
+        # Reduce per case - average over classes to get per-case score
+        # Use mean over class dimension (dim=1) to get (chunk_size,) tensor
+        reduced = chunk_metrics.mean(dim=1)
         all_metrics.append(reduced)
         
         # Clear intermediate tensors
         del chunk_metrics
         gc.collect()
 
-    # Aggregate all metrics
+    # Concatenate all chunk results into single tensor
     all_metrics_tensor = torch.cat(all_metrics)
 
-    # Final aggregation
+    # Final aggregation with CI
     metrics_dict = {"test_metric": all_metrics_tensor}
     results = aggregate_metrics(metrics_dict, method="mean", compute_ci=True, n_bootstrap=100, seed=42)
 

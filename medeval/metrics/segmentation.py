@@ -607,26 +607,41 @@ def hausdorff_distance(
     batch_size = pred_np.shape[0]
     hd_scores = []
 
+    # Determine if we have multi-class or spatial data
+    # If spacing is provided, its length tells us the spatial dimensionality
+    # Shape after batch: either (H, W), (Z, Y, X), (C, H, W), or (C, Z, Y, X)
+    spatial_dims = len(spacing) if spacing is not None else None
+    
     for b in range(batch_size):
         pred_b = pred_np[b]
         target_b = target_np[b]
 
-        # Handle multi-class: compute per-class HD
-        if pred_b.ndim > 1 and pred_b.shape[0] > 1:
-            # Multi-class: one-hot or channel-first
+        # Determine if this is multi-class based on spacing
+        # If spacing matches pred_b.ndim, treat as pure spatial (no channel dim)
+        # If spacing is one less than pred_b.ndim, first dim is channel
+        is_multiclass = False
+        if spatial_dims is not None:
+            if pred_b.ndim == spatial_dims:
+                is_multiclass = False
+            elif pred_b.ndim == spatial_dims + 1:
+                is_multiclass = True
+        else:
+            # No spacing provided - use heuristic: if first dim is small (<=10) and not square, might be multiclass
+            is_multiclass = pred_b.ndim >= 3 and pred_b.shape[0] <= 10 and pred_b.shape[0] != pred_b.shape[1]
+
+        if is_multiclass:
+            # Multi-class: iterate over channel dimension
             class_hds = []
             for c in range(pred_b.shape[0]):
                 pred_c = pred_b[c] > 0.5
                 target_c = target_b[c] > 0.5 if target_b.ndim > 1 else target_b > 0.5
 
                 if ignore_index is not None and c == ignore_index:
-                    # Skip ignored class index
                     continue
 
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
-                # Empty-set handling
                 if len(pred_surface) == 0 and len(target_surface) == 0:
                     class_hds.append(0.0)
                     continue
@@ -638,7 +653,6 @@ def hausdorff_distance(
                 class_hds.append(hd)
 
             if class_hds:
-                # NaN-aware mean: ignore undefined classes (e.g., one empty surface)
                 if np.all(np.isnan(class_hds)):
                     hd_scores.append(float("nan"))
                 else:
@@ -646,11 +660,12 @@ def hausdorff_distance(
             else:
                 hd_scores.append(float("nan"))
         else:
-            # Binary case
-            if pred_b.ndim > 1:
-                pred_b = pred_b[0] if pred_b.shape[0] == 1 else pred_b.squeeze(0)
-            if target_b.ndim > 1:
-                target_b = target_b[0] if target_b.shape[0] == 1 else target_b.squeeze(0)
+            # Binary/spatial case - treat entire pred_b as spatial mask
+            # Remove singleton channel dim if present
+            if pred_b.ndim > 1 and pred_b.shape[0] == 1:
+                pred_b = pred_b[0]
+            if target_b.ndim > 1 and target_b.shape[0] == 1:
+                target_b = target_b[0]
 
             pred_binary = pred_b > 0.5
             target_binary = target_b > 0.5
@@ -663,7 +678,6 @@ def hausdorff_distance(
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
 
-            # Empty-set handling
             if len(pred_surface) == 0 and len(target_surface) == 0:
                 hd_scores.append(0.0)
                 continue
@@ -749,13 +763,24 @@ def average_symmetric_surface_distance(
     batch_size = pred_np.shape[0]
     assd_scores = []
 
+    # Determine spatial dimensionality from spacing
+    spatial_dims = len(spacing) if spacing is not None else None
+
     for b in range(batch_size):
         pred_b = pred_np[b]
         target_b = target_np[b]
 
-        # Handle binary case
-        if pred_b.ndim > 1 and pred_b.shape[0] > 1:
-            # Multi-class: average over classes
+        # Determine if multi-class based on spacing
+        is_multiclass = False
+        if spatial_dims is not None:
+            if pred_b.ndim == spatial_dims:
+                is_multiclass = False
+            elif pred_b.ndim == spatial_dims + 1:
+                is_multiclass = True
+        else:
+            is_multiclass = pred_b.ndim >= 3 and pred_b.shape[0] <= 10 and pred_b.shape[0] != pred_b.shape[1]
+
+        if is_multiclass:
             class_assds = []
             for c in range(pred_b.shape[0]):
                 pred_c = pred_b[c] > 0.5
@@ -767,9 +792,6 @@ def average_symmetric_surface_distance(
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
-                # Empty-set handling:
-                # - both empty => 0.0 (perfect match)
-                # - one empty  => NaN (undefined)
                 if len(pred_surface) == 0 and len(target_surface) == 0:
                     class_assds.append(0.0)
                     continue
@@ -777,7 +799,6 @@ def average_symmetric_surface_distance(
                     class_assds.append(float("nan"))
                     continue
 
-                # Compute distances
                 dists_pred_to_target = cdist(pred_surface, target_surface, metric="euclidean")
                 dists_target_to_pred = cdist(target_surface, pred_surface, metric="euclidean")
 
@@ -795,11 +816,11 @@ def average_symmetric_surface_distance(
             else:
                 assd_scores.append(float("nan"))
         else:
-            # Binary case
-            if pred_b.ndim > 1:
-                pred_b = pred_b[0] if pred_b.shape[0] == 1 else pred_b.squeeze(0)
-            if target_b.ndim > 1:
-                target_b = target_b[0] if target_b.shape[0] == 1 else target_b.squeeze(0)
+            # Binary/spatial case
+            if pred_b.ndim > 1 and pred_b.shape[0] == 1:
+                pred_b = pred_b[0]
+            if target_b.ndim > 1 and target_b.shape[0] == 1:
+                target_b = target_b[0]
 
             pred_binary = pred_b > 0.5
             target_binary = target_b > 0.5
@@ -812,9 +833,6 @@ def average_symmetric_surface_distance(
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
 
-            # Empty-set handling:
-            # - both empty => 0.0
-            # - one empty  => NaN
             if len(pred_surface) == 0 and len(target_surface) == 0:
                 assd_scores.append(0.0)
                 continue
@@ -878,12 +896,24 @@ def surface_dice(
     batch_size = pred_np.shape[0]
     surface_dice_scores = []
 
+    # Determine spatial dimensionality from spacing
+    spatial_dims = len(spacing) if spacing is not None else None
+
     for b in range(batch_size):
         pred_b = pred_np[b]
         target_b = target_np[b]
 
-        # Handle binary case
-        if pred_b.ndim > 1 and pred_b.shape[0] > 1:
+        # Determine if multi-class based on spacing
+        is_multiclass = False
+        if spatial_dims is not None:
+            if pred_b.ndim == spatial_dims:
+                is_multiclass = False
+            elif pred_b.ndim == spatial_dims + 1:
+                is_multiclass = True
+        else:
+            is_multiclass = pred_b.ndim >= 3 and pred_b.shape[0] <= 10 and pred_b.shape[0] != pred_b.shape[1]
+
+        if is_multiclass:
             class_scores = []
             for c in range(pred_b.shape[0]):
                 pred_c = pred_b[c] > 0.5
@@ -895,9 +925,6 @@ def surface_dice(
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
-                # Empty-set handling:
-                # - both empty => 1.0 (perfect match)
-                # - one empty  => 0.0 (miss)
                 if len(pred_surface) == 0 and len(target_surface) == 0:
                     class_scores.append(1.0)
                     continue
@@ -905,30 +932,28 @@ def surface_dice(
                     class_scores.append(0.0)
                     continue
 
-                # Compute distances
                 dists_pred_to_target = cdist(pred_surface, target_surface, metric="euclidean")
                 min_dists_pred = np.min(dists_pred_to_target, axis=1)
 
                 dists_target_to_pred = cdist(target_surface, pred_surface, metric="euclidean")
                 min_dists_target = np.min(dists_target_to_pred, axis=1)
 
-                # Fraction within tolerance
                 within_tol_pred = np.sum(min_dists_pred <= tolerance) / len(min_dists_pred)
                 within_tol_target = np.sum(min_dists_target <= tolerance) / len(min_dists_target)
 
-                surface_dice = (within_tol_pred + within_tol_target) / 2.0
-                class_scores.append(surface_dice)
+                sd = (within_tol_pred + within_tol_target) / 2.0
+                class_scores.append(sd)
 
             if class_scores:
                 surface_dice_scores.append(float(np.mean(class_scores)))
             else:
                 surface_dice_scores.append(0.0)
         else:
-            # Binary case
-            if pred_b.ndim > 1:
-                pred_b = pred_b[0] if pred_b.shape[0] == 1 else pred_b.squeeze(0)
-            if target_b.ndim > 1:
-                target_b = target_b[0] if target_b.shape[0] == 1 else target_b.squeeze(0)
+            # Binary/spatial case
+            if pred_b.ndim > 1 and pred_b.shape[0] == 1:
+                pred_b = pred_b[0]
+            if target_b.ndim > 1 and target_b.shape[0] == 1:
+                target_b = target_b[0]
 
             pred_binary = pred_b > 0.5
             target_binary = target_b > 0.5
@@ -941,9 +966,6 @@ def surface_dice(
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
 
-            # Empty-set handling:
-            # - both empty => 1.0
-            # - one empty  => 0.0
             if len(pred_surface) == 0 and len(target_surface) == 0:
                 surface_dice_scores.append(1.0)
                 continue
@@ -960,8 +982,8 @@ def surface_dice(
             within_tol_pred = np.sum(min_dists_pred <= tolerance) / len(min_dists_pred)
             within_tol_target = np.sum(min_dists_target <= tolerance) / len(min_dists_target)
 
-            surface_dice = (within_tol_pred + within_tol_target) / 2.0
-            surface_dice_scores.append(surface_dice)
+            sd = (within_tol_pred + within_tol_target) / 2.0
+            surface_dice_scores.append(sd)
 
     surface_dice_tensor = torch.tensor(surface_dice_scores, device=pred.device, dtype=torch.float32)
     return reduce_metrics(surface_dice_tensor.unsqueeze(1), reduction=reduction)

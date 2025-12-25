@@ -261,7 +261,9 @@ def auprc(
 
         if np.sum(target) > 0:
             precision, recall, _ = precision_recall_curve(target, pred)
-            auprc_score = np.trapz(precision, recall)
+            # Sort by recall ascending for proper trapz integration
+            sorted_idx = np.argsort(recall)
+            auprc_score = np.trapz(precision[sorted_idx], recall[sorted_idx])
         else:
             auprc_score = 0.0
 
@@ -305,17 +307,25 @@ def accuracy(
     if pred.dim() > 1 and pred.shape[-1] > 1:
         pred_classes = pred.argmax(dim=-1)
     else:
-        pred_classes = (pred > threshold).long()
+        pred_classes = (pred > threshold).long().flatten()
 
     if target.dim() > 1 and target.shape[-1] > 1:
         target_classes = target.argmax(dim=-1)
     else:
-        target_classes = target.long()
+        target_classes = target.long().flatten()
 
-    # Compute accuracy per sample
+    # Compute accuracy
     correct = (pred_classes == target_classes).float()
+    
+    # For flat 1D input, return overall accuracy
+    if correct.dim() == 1:
+        accuracy_score = correct.mean()
+        if reduction == "none":
+            return correct  # Per-sample correctness
+        return accuracy_score.unsqueeze(0)
+    
+    # For batched input with spatial dims, compute per-sample accuracy
     accuracy_scores = correct.mean(dim=tuple(range(1, correct.dim())))
-
     return reduce_metrics(accuracy_scores.unsqueeze(1), reduction=reduction)
 
 
@@ -420,18 +430,21 @@ def sensitivity(
     pred = as_tensor(pred)
     target = as_tensor(target)
 
-    # Binary classification
-    pred_binary = (pred > threshold).float()
-    target_binary = target.float()
+    # Flatten for simple binary classification
+    pred_binary = (pred > threshold).float().flatten()
+    target_binary = target.float().flatten()
 
-    tp = (pred_binary * target_binary).sum(dim=tuple(range(1, pred_binary.dim())))
-    fn = ((1 - pred_binary) * target_binary).sum(dim=tuple(range(1, target_binary.dim())))
+    # Compute TP and FN over all samples
+    tp = (pred_binary * target_binary).sum()
+    fn = ((1 - pred_binary) * target_binary).sum()
 
-    sensitivity_scores = torch.where(
+    sensitivity_score = torch.where(
         (tp + fn) > 0, tp / (tp + fn), torch.tensor(0.0, device=pred.device)
     )
 
-    return reduce_metrics(sensitivity_scores.unsqueeze(1), reduction=reduction)
+    if reduction == "none":
+        return sensitivity_score.unsqueeze(0)
+    return sensitivity_score.unsqueeze(0)
 
 
 def specificity(
@@ -462,18 +475,21 @@ def specificity(
     pred = as_tensor(pred)
     target = as_tensor(target)
 
-    # Binary classification
-    pred_binary = (pred > threshold).float()
-    target_binary = target.float()
+    # Flatten for simple binary classification
+    pred_binary = (pred > threshold).float().flatten()
+    target_binary = target.float().flatten()
 
-    tn = ((1 - pred_binary) * (1 - target_binary)).sum(dim=tuple(range(1, pred_binary.dim())))
-    fp = (pred_binary * (1 - target_binary)).sum(dim=tuple(range(1, target_binary.dim())))
+    # Compute TN and FP over all samples
+    tn = ((1 - pred_binary) * (1 - target_binary)).sum()
+    fp = (pred_binary * (1 - target_binary)).sum()
 
-    specificity_scores = torch.where(
+    specificity_score = torch.where(
         (tn + fp) > 0, tn / (tn + fp), torch.tensor(0.0, device=pred.device)
     )
 
-    return reduce_metrics(specificity_scores.unsqueeze(1), reduction=reduction)
+    if reduction == "none":
+        return specificity_score.unsqueeze(0)
+    return specificity_score.unsqueeze(0)
 
 
 def f1_score_metric(

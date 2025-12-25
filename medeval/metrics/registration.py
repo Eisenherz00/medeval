@@ -94,8 +94,9 @@ def normalized_mutual_information(
     """
     Compute Normalized Mutual Information (NMI) between two images.
 
-    NMI = (H(X) + H(Y)) / H(X, Y)
-    where H is entropy.
+    Uses the bounded formula: NMI = 2 * I(X,Y) / (H(X) + H(Y))
+    where I(X,Y) = H(X) + H(Y) - H(X,Y) is the mutual information.
+    Result is bounded to [0, 1].
 
     Parameters
     ----------
@@ -109,7 +110,7 @@ def normalized_mutual_information(
     Returns
     -------
     float
-        NMI value
+        NMI value in [0, 1]
     """
     if not HAS_ENTROPY:
         raise ImportError("scipy.stats.entropy is required for NMI computation")
@@ -140,9 +141,14 @@ def normalized_mutual_information(
     h_y = entropy(hist_1d_y[hist_1d_y > 0])
     h_xy = entropy(hist_2d[hist_2d > 0])
 
-    # Compute NMI
-    if h_xy > 0:
-        nmi = (h_x + h_y) / h_xy
+    # Compute mutual information: I(X,Y) = H(X) + H(Y) - H(X,Y)
+    mi = h_x + h_y - h_xy
+
+    # Compute bounded NMI: 2 * MI / (H(X) + H(Y))
+    if (h_x + h_y) > 0:
+        nmi = 2.0 * mi / (h_x + h_y)
+        # Clamp to [0, 1] to handle numerical issues
+        nmi = max(0.0, min(1.0, nmi))
     else:
         nmi = 0.0
 

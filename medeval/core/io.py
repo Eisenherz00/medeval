@@ -100,6 +100,7 @@ def load_nifti(
     path: str,
     as_torch: bool = True,
     device: Optional[Device] = None,
+    dtype: Optional[torch.dtype] = torch.float32,
 ) -> Union[Tensor, np.ndarray]:
     """
     Load NIfTI file and extract image data with spacing information.
@@ -112,6 +113,8 @@ def load_nifti(
         If True, return PyTorch tensor; else numpy array
     device : Device, optional
         Device for tensor (if as_torch=True)
+    dtype : torch.dtype, optional
+        Data type for output tensor (default: float32)
 
     Returns
     -------
@@ -125,8 +128,11 @@ def load_nifti(
     data = nii.get_fdata()
 
     if as_torch:
-        return as_tensor(data, device=device)
-    return data
+        tensor = as_tensor(data, device=device)
+        if dtype is not None:
+            tensor = tensor.to(dtype)
+        return tensor
+    return data.astype(np.float32) if dtype == torch.float32 else data
 
 
 def save_nifti(
