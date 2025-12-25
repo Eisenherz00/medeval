@@ -611,21 +611,58 @@ def evaluate_command(args, config: Dict) -> int:
         seed=agg_config.get("seed", 42),
     )
 
-    # Stratified aggregation if strata available
+    # Stratified aggregation if strata available.
+    # NOTE: metrics can contain NaN/inf (e.g., surface metrics when spacing is missing).
+    # We compute stratified summaries per-metric using finite values only.
     stratified_results = None
-    unique_strata = [s for s in set(strata_data) if s is not None]
-    if len(unique_strata) > 1:
-        logger.info(f"Computing stratified metrics for {len(unique_strata)} strata...")
-        stratified_results = stratified_aggregate(
-            {k: np.array(v) for k, v in all_metrics.items()},
-            strata=np.array([s or "unknown" for s in strata_data]),
-            method="mean",
-            compute_ci=True,
-            ci_method="bootstrap",
-            confidence=confidence,
-            n_bootstrap=n_bootstrap,
-            seed=agg_config.get("seed", 42),
-        )
+
+    # Collect successful rows into a DataFrame for easy filtering
+    success_rows = [r for r in all_results if r.get("status") == "success"]
+    if success_rows:
+        success_df = pd.DataFrame(success_rows)
+        if "strata" in success_df.columns:
+            success_df["strata"] = success_df["strata"].fillna("unknown").astype(str)
+
+            unique_strata = sorted(set(success_df["strata"].tolist()))
+            if len(unique_strata) > 1:
+                logger.info(f"Computing stratified metrics for {len(unique_strata)} strata...")
+
+                stratified_results = {}
+                seed = agg_config.get("seed", 42)
+
+                # Only stratify over real metric keys (skip helper fields)
+                metric_keys = [k for k in all_metrics.keys() if not str(k).startswith("_")]
+
+                for stratum in unique_strata:
+                    sub = success_df[success_df["strata"] == stratum]
+                    if sub.empty:
+                        continue
+
+                    stratified_results[stratum] = {}
+
+                    for k in metric_keys:
+                        if k not in sub.columns:
+                            continue
+                        vals = pd.to_numeric(sub[k], errors="coerce").to_numpy(dtype=float)
+                        vals = vals[np.isfinite(vals)]
+                        if vals.size == 0:
+                            continue
+
+                        agg_k = aggregate_metrics(
+                            {k: vals},
+                            method="mean",
+                            compute_ci=True,
+                            ci_method="bootstrap",
+                            confidence=confidence,
+                            n_bootstrap=n_bootstrap,
+                            seed=seed,
+                        )
+                        # aggregate_metrics returns {k: (mean, lo, hi)} when compute_ci=True
+                        stratified_results[stratum][k] = agg_k[k]
+
+                # If everything got filtered out, keep None
+                if not stratified_results:
+                    stratified_results = None
 
     # Build and save summary
     summary = _compute_summary(

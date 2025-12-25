@@ -69,6 +69,32 @@ def _flatten_to_1d(values: ArrayLike) -> np.ndarray:
     return values_tensor.cpu().numpy()
 
 
+def _normalize_strata_labels(strata_np: np.ndarray) -> np.ndarray:
+    """Normalize strata labels so missing values don't silently drop groups.
+
+    - Converts None / NaN to the string "unknown".
+    - Leaves other values as-is.
+
+    Returns an object-dtype 1D array.
+    """
+    s = np.asarray(strata_np).reshape(-1)
+    out = s.astype(object)
+
+    for i, v in enumerate(out):
+        # None
+        if v is None:
+            out[i] = "unknown"
+            continue
+        # NaN (float or numpy scalar)
+        try:
+            if isinstance(v, (float, np.floating)) and np.isnan(v):
+                out[i] = "unknown"
+                continue
+        except Exception:
+            pass
+    return out
+
+
 def bootstrap_ci(
     values: ArrayLike,
     confidence: float = 0.95,
@@ -291,6 +317,7 @@ def stratified_aggregate(
     if strata_tensor.dim() > 1:
         strata_tensor = strata_tensor.flatten()
     strata_np = strata_tensor.cpu().numpy()
+    strata_np = _normalize_strata_labels(strata_np)
 
     unique_strata = np.unique(strata_np)
     results = {}

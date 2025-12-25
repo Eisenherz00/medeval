@@ -96,20 +96,28 @@ def _get_surface_points(mask: np.ndarray, spacing: Optional[Tuple[float, ...]] =
     if spacing is None:
         spacing = (1.0,) * mask.ndim
 
+    # Validate spacing
+    if len(spacing) != mask.ndim:
+        raise ValueError(
+            f"Spacing dimension {len(spacing)} does not match mask.ndim {mask.ndim}"
+        )
+
     # Use morphological operations to find surface
     # Surface = mask - eroded(mask)
     structure = np.ones((3,) * mask.ndim, dtype=bool)
-    eroded = ndimage.binary_erosion(mask, structure=structure)
+    eroded = ndimage.binary_erosion(mask.astype(bool), structure=structure)
     surface = mask.astype(bool) & (~eroded)
 
     # Get coordinates of surface points
     coords = np.argwhere(surface)
 
-    # Apply spacing if provided
-    if spacing is not None and len(spacing) == coords.shape[1]:
-        coords = coords.astype(np.float32)
-        for i, s in enumerate(spacing):
-            coords[:, i] *= s
+    # Apply spacing
+    if coords.size == 0:
+        return coords.astype(np.float32)
+
+    coords = coords.astype(np.float32)
+    for i, s in enumerate(spacing):
+        coords[:, i] *= float(s)
 
     return coords
 
@@ -135,7 +143,8 @@ def _compute_hausdorff_distance(
         Hausdorff distance (or percentile)
     """
     # Undefined if one of the surfaces is empty.
-    # The caller should decide how to aggregate NaNs.
+    # Convention in this repo: caller maps (both empty)->0.0, (one empty)->NaN,
+    # and higher-level aggregation should be NaN-aware.
     if len(pred_surface) == 0 or len(target_surface) == 0:
         return float("nan")
 
@@ -610,8 +619,8 @@ def hausdorff_distance(
                 pred_c = pred_b[c] > 0.5
                 target_c = target_b[c] > 0.5 if target_b.ndim > 1 else target_b > 0.5
 
-                if ignore_index is not None:
-                    # Skip if this is the ignore class
+                if ignore_index is not None and c == ignore_index:
+                    # Skip ignored class index
                     continue
 
                 pred_surface = _get_surface_points(pred_c, spacing)
@@ -752,7 +761,7 @@ def average_symmetric_surface_distance(
                 pred_c = pred_b[c] > 0.5
                 target_c = target_b[c] > 0.5 if target_b.ndim > 1 else target_b > 0.5
 
-                if ignore_index is not None:
+                if ignore_index is not None and c == ignore_index:
                     continue
 
                 pred_surface = _get_surface_points(pred_c, spacing)
@@ -880,7 +889,7 @@ def surface_dice(
                 pred_c = pred_b[c] > 0.5
                 target_c = target_b[c] > 0.5 if target_b.ndim > 1 else target_b > 0.5
 
-                if ignore_index is not None:
+                if ignore_index is not None and c == ignore_index:
                     continue
 
                 pred_surface = _get_surface_points(pred_c, spacing)

@@ -224,13 +224,60 @@ class TestSurfaceMetrics:
         assert 0.0 < surface_dice_score.item() <= 1.0
 
     def test_surface_metrics_empty_sets(self):
-        """Test surface metrics with empty predictions/targets."""
+        """Test surface metrics with empty predictions/targets.
+
+        Empty-set policy (surface metrics):
+        - both empty => distance 0.0 (perfect match)
+        - one empty  => NaN (undefined; caller/aggregator should be NaN-aware)
+        """
+        # one empty
         pred = torch.zeros(1, 10, 10)
         target = torch.ones(1, 10, 10)
 
-        # Empty prediction should result in inf HD
         hd = hausdorff_distance(pred, target, reduction="none")
-        assert torch.isinf(hd) or hd.item() == float("inf")
+        hd95 = hausdorff_distance_95(pred, target, reduction="none")
+        assd = average_symmetric_surface_distance(pred, target, reduction="none")
+
+        assert torch.isnan(hd) or torch.isinf(hd)
+        assert torch.isnan(hd95) or torch.isinf(hd95)
+        assert torch.isnan(assd) or torch.isinf(assd)
+
+        # both empty
+        pred2 = torch.zeros(1, 10, 10)
+        target2 = torch.zeros(1, 10, 10)
+
+        hd2 = hausdorff_distance(pred2, target2, reduction="none")
+        hd95_2 = hausdorff_distance_95(pred2, target2, reduction="none")
+        assd2 = average_symmetric_surface_distance(pred2, target2, reduction="none")
+        sd2 = surface_dice(pred2, target2, tolerance=1.0, reduction="none")
+
+        assert torch.allclose(hd2, torch.tensor(0.0))
+        assert torch.allclose(hd95_2, torch.tensor(0.0))
+        assert torch.allclose(assd2, torch.tensor(0.0))
+        assert torch.allclose(sd2, torch.tensor(1.0))
+    def test_surface_metrics_multiclass_ignore_index(self):
+        """Test that ignore_index skips only the specified class channel (not all classes)."""
+        # 3-class one-hot-ish tensor (B, C, H, W)
+        pred = torch.zeros(1, 3, 20, 20)
+        target = torch.zeros(1, 3, 20, 20)
+
+        # class 1: slightly shifted squares
+        pred[0, 1, 5:10, 5:10] = 1.0
+        target[0, 1, 6:11, 6:11] = 1.0
+
+        # class 2: totally different squares (would increase distances if included)
+        pred[0, 2, 1:3, 1:3] = 1.0
+        target[0, 2, 15:18, 15:18] = 1.0
+
+        # If we ignore class 2, metrics should be driven mostly by class 1 (finite).
+        spacing = (1.0, 1.0)
+        hd = hausdorff_distance(pred, target, spacing=spacing, ignore_index=2, reduction="none")
+        assd = average_symmetric_surface_distance(pred, target, spacing=spacing, ignore_index=2, reduction="none")
+        sd = surface_dice(pred, target, tolerance=2.0, spacing=spacing, ignore_index=2, reduction="none")
+
+        assert torch.isfinite(hd).item()
+        assert torch.isfinite(assd).item()
+        assert 0.0 <= sd.item() <= 1.0
 
     def test_surface_metrics_3d(self):
         """Test surface metrics on 3D volumes."""
@@ -362,6 +409,16 @@ class TestComprehensiveMetrics:
         assert "surface_dice" in results
         assert "soft_dice" in results
         assert "brier" in results
+
+        # Also exercise 3D surface path on a tiny volume
+        pred3 = (torch.rand(1, 8, 8, 8) > 0.5).float()
+        tgt3 = (torch.rand(1, 8, 8, 8) > 0.5).float()
+        results3 = compute_segmentation_metrics(
+            pred3, tgt3, spacing=(1.0, 1.0, 1.0), include_surface=True, include_calibration=False
+        )
+        assert "hausdorff" in results3
+        assert "assd" in results3
+        assert "surface_dice" in results3
 
     def test_compute_metrics_no_surface(self):
         """Test metric computation without surface metrics."""
