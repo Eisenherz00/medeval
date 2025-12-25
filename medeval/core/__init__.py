@@ -1,12 +1,34 @@
-"""Core utilities for medical imaging evaluation."""
+"""Core utilities for medical imaging evaluation.
+
+This module provides core functionality including:
+- Type aliases and device/dtype utilities
+- IO adapters for medical image formats
+- Aggregation with confidence intervals
+- Data containers for predictions and targets
+- Interoperability with MONAI and torchmetrics
+"""
 
 from medeval.core.aggregate import (
+    AggregationMethod,
     aggregate_metrics,
     bootstrap_ci,
     jackknife_ci,
     stratified_aggregate,
 )
+from medeval.core.containers import (
+    EvaluationBatch,
+    MedicalPrediction,
+)
+from medeval.core.interop import (
+    MedEvalMetricWrapper,
+    MONAITransformWrapper,
+    medeval_to_torchmetrics,
+    torchmetrics_to_medeval,
+)
 from medeval.core.io import (
+    get_nifti_spacing,
+    get_sitk_spacing,
+    load_dicom,
     load_image,
     load_nifti,
     load_sitk,
@@ -27,6 +49,7 @@ from medeval.core.typing import (
     to_dtype,
 )
 from medeval.core.utils import (
+    ReductionType,
     apply_spacing,
     compute_one_hot,
     compute_weights,
@@ -48,6 +71,7 @@ __all__ = [
     "get_device",
     "get_dtype",
     # Utils
+    "ReductionType",
     "apply_spacing",
     "sample_with_spacing",
     "label_mapping",
@@ -59,11 +83,23 @@ __all__ = [
     "save_image",
     "load_nifti",
     "save_nifti",
+    "get_nifti_spacing",
     "load_sitk",
     "save_sitk",
+    "get_sitk_spacing",
+    "load_dicom",
     # Aggregate
+    "AggregationMethod",
     "aggregate_metrics",
     "bootstrap_ci",
     "jackknife_ci",
     "stratified_aggregate",
+    # Containers
+    "MedicalPrediction",
+    "EvaluationBatch",
+    # Interop
+    "MONAITransformWrapper",
+    "MedEvalMetricWrapper",
+    "torchmetrics_to_medeval",
+    "medeval_to_torchmetrics",
 ]

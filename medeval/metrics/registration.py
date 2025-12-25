@@ -181,10 +181,9 @@ def normalized_cross_correlation(
 
     if local:
         # Local NCC: compute NCC in sliding windows and average
-        # This is a simplified version - full implementation would use proper sliding windows
-        # For now, we'll compute global NCC
-        pass
+        return _compute_local_ncc(image1, image2, window_size)
 
+    # Global NCC
     # Flatten images
     img1_flat = image1.flatten()
     img2_flat = image2.flatten()
@@ -207,6 +206,79 @@ def normalized_cross_correlation(
         ncc = torch.tensor(0.0)
 
     return float(ncc.item())
+
+
+def _compute_local_ncc(
+    image1: Tensor,
+    image2: Tensor,
+    window_size: int = 9,
+) -> float:
+    """
+    Compute local NCC by averaging NCC over sliding windows.
+
+    Parameters
+    ----------
+    image1 : Tensor
+        First image
+    image2 : Tensor
+        Second image
+    window_size : int
+        Window size for local computation
+
+    Returns
+    -------
+    float
+        Average local NCC
+    """
+    # Ensure images have batch and channel dimensions for conv operations
+    if image1.dim() == 2:
+        image1 = image1.unsqueeze(0).unsqueeze(0)
+        image2 = image2.unsqueeze(0).unsqueeze(0)
+    elif image1.dim() == 3:
+        image1 = image1.unsqueeze(0)
+        image2 = image2.unsqueeze(0)
+
+    # Create uniform kernel for local mean computation
+    ndim = image1.dim() - 2  # Spatial dimensions
+    kernel_size = [window_size] * ndim
+    kernel = torch.ones(1, 1, *kernel_size, device=image1.device, dtype=image1.dtype)
+    kernel = kernel / kernel.numel()
+
+    # Padding for same output size
+    padding = window_size // 2
+
+    if ndim == 2:
+        # 2D local NCC
+        local_mean1 = F.conv2d(image1, kernel, padding=padding)
+        local_mean2 = F.conv2d(image2, kernel, padding=padding)
+
+        # Local variance terms
+        img1_centered = image1 - local_mean1
+        img2_centered = image2 - local_mean2
+
+        local_cov = F.conv2d(img1_centered * img2_centered, kernel, padding=padding)
+        local_var1 = F.conv2d(img1_centered ** 2, kernel, padding=padding)
+        local_var2 = F.conv2d(img2_centered ** 2, kernel, padding=padding)
+
+    else:
+        # 3D local NCC
+        local_mean1 = F.conv3d(image1, kernel, padding=padding)
+        local_mean2 = F.conv3d(image2, kernel, padding=padding)
+
+        img1_centered = image1 - local_mean1
+        img2_centered = image2 - local_mean2
+
+        local_cov = F.conv3d(img1_centered * img2_centered, kernel, padding=padding)
+        local_var1 = F.conv3d(img1_centered ** 2, kernel, padding=padding)
+        local_var2 = F.conv3d(img2_centered ** 2, kernel, padding=padding)
+
+    # Compute local NCC
+    epsilon = 1e-10
+    denominator = torch.sqrt(local_var1 * local_var2 + epsilon)
+    local_ncc = local_cov / denominator
+
+    # Average over all locations
+    return float(local_ncc.mean().item())
 
 
 def mind_ssd(
@@ -283,14 +355,18 @@ def jacobian_determinant(
     Compute Jacobian determinant of deformation field.
 
     The Jacobian determinant indicates local volume change and folding.
+    - |J| < 0: indicates folding (physically impossible deformation)
+    - |J| = 1: volume-preserving
+    - |J| > 1: expansion
+    - 0 < |J| < 1: compression
 
     Parameters
     ----------
     deformation_field : ArrayLike
-        Deformation field, shape (..., D, H, W) or (..., D, Z, H, W) for 3D
-        where D is the spatial dimension
+        Deformation field, shape (D, H, W) for 2D or (D, Z, H, W) for 3D
+        where D is the number of spatial dimensions (2 for 2D, 3 for 3D)
     spacing : Tuple[float, ...], optional
-        Physical spacing
+        Physical spacing (dy, dx) for 2D or (dz, dy, dx) for 3D
 
     Returns
     -------
@@ -299,44 +375,33 @@ def jacobian_determinant(
     """
     deformation_field = as_tensor(deformation_field).float()
 
-    # Get spatial dimensions
-    if deformation_field.dim() == 4:  # 2D: (D, H, W)
+    # Determine spatial dimensions based on shape
+    if deformation_field.dim() == 3:
+        # 2D: (2, H, W)
         spatial_dims = 2
+        n_components = deformation_field.shape[0]
+        if n_components != 2:
+            raise ValueError(f"For 2D, expected 2 components, got {n_components}")
         h, w = deformation_field.shape[1], deformation_field.shape[2]
-        jacobians = np.zeros((h, w))
-    elif deformation_field.dim() == 5:  # 3D: (D, Z, H, W)
+    elif deformation_field.dim() == 4:
+        # 3D: (3, Z, H, W)
         spatial_dims = 3
-        d, h, w = deformation_field.shape[1], deformation_field.shape[2], deformation_field.shape[3]
-        jacobians = np.zeros((d, h, w))
+        n_components = deformation_field.shape[0]
+        if n_components != 3:
+            raise ValueError(f"For 3D, expected 3 components, got {n_components}")
+        z, h, w = deformation_field.shape[1], deformation_field.shape[2], deformation_field.shape[3]
     else:
         raise ValueError(f"Unsupported deformation field shape: {deformation_field.shape}")
 
     if spacing is None:
         spacing = (1.0,) * spatial_dims
 
-    # Compute Jacobian determinant at each point
-    # Jacobian = det(d(phi)/dx) where phi is the deformation field
-    # For numerical computation, we compute gradients
     def_field_np = deformation_field.cpu().numpy()
 
     if spatial_dims == 2:
-        # 2D case
-        for i in range(h):
-            for j in range(w):
-                # Compute gradients
-                if i < h - 1 and j < w - 1:
-                    dx_dx = (def_field_np[0, i + 1, j] - def_field_np[0, i, j]) / spacing[0]
-                    dx_dy = (def_field_np[0, i, j + 1] - def_field_np[0, i, j]) / spacing[1]
-                    dy_dx = (def_field_np[1, i + 1, j] - def_field_np[1, i, j]) / spacing[0]
-                    dy_dy = (def_field_np[1, i, j + 1] - def_field_np[1, j]) / spacing[1]
-
-                    # Jacobian matrix
-                    jacobian_matrix = np.array([[1 + dx_dx, dx_dy], [dy_dx, 1 + dy_dy]])
-                    jacobians[i, j] = np.linalg.det(jacobian_matrix)
+        jacobians = _compute_jacobian_2d(def_field_np, spacing)
     else:
-        # 3D case - simplified computation
-        # For full 3D, need to compute 3x3 Jacobian matrix
-        jacobians = np.ones((d, h, w))  # Placeholder - full implementation would compute 3x3 det
+        jacobians = _compute_jacobian_3d(def_field_np, spacing)
 
     # Compute statistics
     jacobians_flat = jacobians.flatten()
@@ -351,6 +416,79 @@ def jacobian_determinant(
         "folding_percentage": folding_percentage,
         "jacobians": jacobians,
     }
+
+
+def _compute_jacobian_2d(
+    def_field: np.ndarray,
+    spacing: Tuple[float, ...],
+) -> np.ndarray:
+    """Compute 2D Jacobian determinant using central differences."""
+    h, w = def_field.shape[1], def_field.shape[2]
+    jacobians = np.ones((h, w))
+
+    # Use gradient for numerical differentiation
+    # def_field[0] = displacement in y direction
+    # def_field[1] = displacement in x direction
+
+    # Compute gradients using numpy gradient (central differences)
+    # dy_dy: gradient of y-displacement w.r.t. y
+    # dy_dx: gradient of y-displacement w.r.t. x
+    # dx_dy: gradient of x-displacement w.r.t. y
+    # dx_dx: gradient of x-displacement w.r.t. x
+
+    dy_dy, dy_dx = np.gradient(def_field[0], spacing[0], spacing[1])
+    dx_dy, dx_dx = np.gradient(def_field[1], spacing[0], spacing[1])
+
+    # Jacobian matrix at each point:
+    # J = [[1 + dy_dy, dy_dx],
+    #      [dx_dy, 1 + dx_dx]]
+    # det(J) = (1 + dy_dy)(1 + dx_dx) - dy_dx * dx_dy
+
+    jacobians = (1 + dy_dy) * (1 + dx_dx) - dy_dx * dx_dy
+
+    return jacobians
+
+
+def _compute_jacobian_3d(
+    def_field: np.ndarray,
+    spacing: Tuple[float, ...],
+) -> np.ndarray:
+    """Compute 3D Jacobian determinant using central differences."""
+    z, h, w = def_field.shape[1], def_field.shape[2], def_field.shape[3]
+
+    # def_field[0] = displacement in z direction
+    # def_field[1] = displacement in y direction
+    # def_field[2] = displacement in x direction
+
+    # Compute gradients for each component
+    dz_dz, dz_dy, dz_dx = np.gradient(def_field[0], spacing[0], spacing[1], spacing[2])
+    dy_dz, dy_dy, dy_dx = np.gradient(def_field[1], spacing[0], spacing[1], spacing[2])
+    dx_dz, dx_dy, dx_dx = np.gradient(def_field[2], spacing[0], spacing[1], spacing[2])
+
+    # Jacobian matrix at each point:
+    # J = [[1 + dz_dz, dz_dy, dz_dx],
+    #      [dy_dz, 1 + dy_dy, dy_dx],
+    #      [dx_dz, dx_dy, 1 + dx_dx]]
+
+    # Compute determinant using the rule for 3x3 matrices
+    j00 = 1 + dz_dz
+    j01 = dz_dy
+    j02 = dz_dx
+    j10 = dy_dz
+    j11 = 1 + dy_dy
+    j12 = dy_dx
+    j20 = dx_dz
+    j21 = dx_dy
+    j22 = 1 + dx_dx
+
+    # det = j00*(j11*j22 - j12*j21) - j01*(j10*j22 - j12*j20) + j02*(j10*j21 - j11*j20)
+    jacobians = (
+        j00 * (j11 * j22 - j12 * j21)
+        - j01 * (j10 * j22 - j12 * j20)
+        + j02 * (j10 * j21 - j11 * j20)
+    )
+
+    return jacobians
 
 
 def bending_energy(

@@ -56,6 +56,10 @@ medeval = "medeval.cli.main:main"
 [tool.setuptools]
 packages = ["medeval", "medeval.core", "medeval.metrics", "medeval.vis", "medeval.cli"]
 
+[tool.bandit]
+exclude_dirs = ["tests", "examples"]
+skips = ["B101"]  # Skip assert warnings
+
 [tool.setuptools.package-data]
 medeval = ["py.typed"]
 

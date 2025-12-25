@@ -804,12 +804,15 @@ def threshold_adaptive_calibration_error(
     pred: ArrayLike,
     target: ArrayLike,
     n_bins: int = 10,
+    threshold: float = 0.5,
     reduction: ReductionType = "mean-case",
 ) -> Tensor:
     """
     Compute Threshold-Adaptive Calibration Error (TACE).
 
-    TACE uses threshold-adaptive binning based on prediction confidence.
+    TACE focuses on calibration error near the decision threshold, which is
+    most relevant for binary classification decisions. It uses bins that are
+    denser near the threshold and sparser away from it.
 
     Parameters
     ----------
@@ -819,6 +822,8 @@ def threshold_adaptive_calibration_error(
         Ground truth labels
     n_bins : int
         Number of bins
+    threshold : float
+        Decision threshold (bins are centered around this)
     reduction : ReductionType
         Reduction strategy
 
@@ -827,9 +832,77 @@ def threshold_adaptive_calibration_error(
     Tensor
         TACE scores
     """
-    # TACE is similar to AECE but with threshold-adaptive binning
-    # For simplicity, we use adaptive binning here
-    return adaptive_expected_calibration_error(pred, target, n_bins=n_bins, reduction=reduction)
+    pred = as_tensor(pred).cpu().numpy()
+    target = as_tensor(target).cpu().numpy()
+
+    # Handle multi-class
+    if pred.ndim > 1 and pred.shape[1] > 1:
+        if pred.min() < 0 or pred.max() > 1:
+            pred = torch.softmax(torch.from_numpy(pred), dim=1).numpy()
+        pred_conf = np.max(pred, axis=1)
+        pred_classes = np.argmax(pred, axis=1)
+
+        if target.ndim > 1 and target.shape[1] > 1:
+            target_classes = np.argmax(target, axis=1)
+        else:
+            target_classes = target.astype(int)
+    else:
+        if pred.ndim > 1:
+            pred = pred.squeeze(1) if pred.shape[1] == 1 else pred[:, 1]
+        pred_conf = pred
+        pred_classes = (pred > threshold).astype(int)
+
+        if target.ndim > 1:
+            target_classes = np.argmax(target, axis=1) if target.shape[1] > 1 else target.squeeze(1)
+        else:
+            target_classes = (target > 0.5).astype(int) if target.dtype == float else target.astype(int)
+
+    # Create threshold-adaptive bins: denser near threshold, sparser away
+    # Use a sigmoid-like spacing to concentrate bins near threshold
+    half_bins = n_bins // 2
+
+    # Bins below threshold (0 to threshold)
+    lower_bins = threshold * (1 - np.exp(-np.linspace(0, 3, half_bins + 1)))
+    lower_bins = np.sort(lower_bins)
+
+    # Bins above threshold (threshold to 1)
+    upper_bins = threshold + (1 - threshold) * (1 - np.exp(-np.linspace(0, 3, half_bins + 1)[::-1]))
+    upper_bins = np.sort(upper_bins)
+
+    # Combine bins
+    bin_boundaries = np.unique(np.concatenate([lower_bins, upper_bins]))
+    bin_boundaries = np.clip(bin_boundaries, 0, 1)
+    bin_boundaries = np.sort(bin_boundaries)
+
+    # Compute TACE
+    tace = 0.0
+    total_weight = 0.0
+
+    for i in range(len(bin_boundaries) - 1):
+        bin_lower = bin_boundaries[i]
+        bin_upper = bin_boundaries[i + 1]
+
+        in_bin = (pred_conf > bin_lower) & (pred_conf <= bin_upper)
+        n_in_bin = np.sum(in_bin)
+
+        if n_in_bin > 0:
+            # Weight bins near threshold more heavily
+            bin_center = (bin_lower + bin_upper) / 2
+            distance_to_threshold = abs(bin_center - threshold)
+            weight = np.exp(-2 * distance_to_threshold)  # Exponential decay
+
+            accuracy_in_bin = (pred_classes[in_bin] == target_classes[in_bin]).mean()
+            avg_confidence_in_bin = pred_conf[in_bin].mean()
+
+            tace += weight * np.abs(avg_confidence_in_bin - accuracy_in_bin) * n_in_bin
+            total_weight += weight * n_in_bin
+
+    if total_weight > 0:
+        tace = tace / total_weight
+    else:
+        tace = 0.0
+
+    return reduce_metrics(torch.tensor([tace], dtype=torch.float32).unsqueeze(1), reduction=reduction)
 
 
 def brier_score_classification(
