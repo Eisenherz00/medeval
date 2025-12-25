@@ -330,3 +330,158 @@ def compute_weights(
         return weights
 
     raise ValueError(f"Unknown weight method: {method}")
+
+
+def normalize_input_shapes(
+    pred: Tensor,
+    target: Tensor,
+    spacing: Optional[Tuple[float, ...]] = None,
+    require_spacing: bool = False,
+) -> Tuple[Tensor, Tensor, int, Optional[Tuple[float, ...]]]:
+    """Normalize input shapes to standard (B, C, ...) format.
+
+    This function handles various input conventions:
+    - 2D: (H, W) -> (1, 1, H, W)
+    - 2D batched: (B, H, W) -> (B, 1, H, W)
+    - 2D with channel: (B, C, H, W) -> unchanged
+    - 3D: (Z, Y, X) -> (1, 1, Z, Y, X)
+    - 3D batched: (B, Z, Y, X) -> (B, 1, Z, Y, X)
+    - 3D with channel: (B, C, Z, Y, X) -> unchanged
+
+    Heuristic for distinguishing (B, Z, Y, X) from (B, C, Y, X):
+    - If axis-1 size is in {1, 2, 3, 4}, treat as channel dim (2D spatial)
+    - Otherwise treat as spatial dim (3D spatial, needs channel added)
+
+    Output Contract
+    ---------------
+    - pred is torch.Tensor with dtype=float32 (for metric computation)
+    - target keeps its original dtype (may be int for label maps, float for soft targets)
+    - Both outputs are on the same device as pred
+    - Both outputs have the same shape: (B, C, *spatial_dims)
+
+    Spacing Convention
+    ------------------
+    This library uses the following spacing axis order:
+    - 2D: (dy, dx) where dy is row spacing, dx is column spacing
+    - 3D: (dz, dy, dx) where dz is slice spacing
+
+    Parameters
+    ----------
+    pred : Tensor
+        Prediction tensor
+    target : Tensor
+        Target tensor
+    spacing : Tuple[float, ...], optional
+        Physical spacing. If provided, validates against spatial dims.
+        For 2D: (dy, dx), for 3D: (dz, dy, dx)
+    require_spacing : bool
+        If True and spacing is None, raises ValueError (for surface metrics)
+
+    Returns
+    -------
+    pred : Tensor
+        Normalized prediction, shape (B, C, ...), dtype float32
+    target : Tensor
+        Normalized target, shape (B, C, ...), dtype float32, same device as pred
+    spatial_dims : int
+        Number of spatial dimensions (2 or 3)
+    spacing : Tuple[float, ...] or None
+        Validated spacing (or None if not provided)
+
+    Raises
+    ------
+    ValueError
+        If shapes are incompatible or spacing is required but not provided
+    """
+    pred = as_tensor(pred)
+    target = as_tensor(target)
+
+    # Ensure float32 dtype for pred (for metric computation)
+    # Keep target's original dtype (may be int for label maps, float for soft targets)
+    pred = pred.float()
+
+    # Ensure same device
+    if target.device != pred.device:
+        target = target.to(pred.device)
+
+    def _normalize_single(x: Tensor) -> Tuple[Tensor, int]:
+        """Normalize a single tensor and return spatial dims."""
+        d = x.dim()
+
+        if d == 2:
+            # (H, W) -> (1, 1, H, W)
+            return x.unsqueeze(0).unsqueeze(0), 2
+
+        if d == 3:
+            # Could be (Z, Y, X) or (B, H, W)
+            # Heuristic: if first dim is small (<= 4), treat as batch
+            if x.shape[0] <= 4:
+                # (B, H, W) -> (B, 1, H, W)
+                return x.unsqueeze(1), 2
+            else:
+                # (Z, Y, X) -> (1, 1, Z, Y, X)
+                return x.unsqueeze(0).unsqueeze(0), 3
+
+        if d == 4:
+            # Could be (B, C, H, W) or (B, Z, Y, X)
+            # Heuristic: if axis-1 is in {1,2,3,4}, treat as channel (2D)
+            if x.shape[1] in (1, 2, 3, 4):
+                # (B, C, H, W) -> unchanged, 2D
+                return x, 2
+            else:
+                # (B, Z, Y, X) -> (B, 1, Z, Y, X), 3D
+                return x.unsqueeze(1), 3
+
+        if d == 5:
+            # (B, C, Z, Y, X) -> unchanged, 3D
+            return x, 3
+
+        # Fallback for higher dims: assume (B, C, ...)
+        return x, max(d - 2, 2)
+
+    pred, pred_spatial = _normalize_single(pred)
+    target, target_spatial = _normalize_single(target)
+
+    # Use the larger spatial dim if they differ (conservative)
+    spatial_dims = max(pred_spatial, target_spatial)
+
+    # Ensure same number of dimensions
+    while pred.dim() < target.dim():
+        pred = pred.unsqueeze(0)
+    while target.dim() < pred.dim():
+        target = target.unsqueeze(0)
+
+    # Validate spacing if provided
+    if spacing is not None:
+        if len(spacing) != spatial_dims:
+            raise ValueError(
+                f"Spacing dimension {len(spacing)} does not match "
+                f"inferred spatial dimensions {spatial_dims}. "
+                f"Expected {spatial_dims}D spacing (dz,dy,dx for 3D or dy,dx for 2D)."
+            )
+
+    if require_spacing and spacing is None:
+        raise ValueError(
+            "Spacing is required for this metric (e.g., surface distances). "
+            "Provide spacing as (dy, dx) for 2D or (dz, dy, dx) for 3D."
+        )
+
+    return pred, target, spatial_dims, spacing
+
+
+def get_spatial_dims_from_spacing(spacing: Optional[Tuple[float, ...]]) -> Optional[int]:
+    """Get number of spatial dimensions from spacing tuple.
+
+    Parameters
+    ----------
+    spacing : Tuple[float, ...], optional
+        Physical spacing
+
+    Returns
+    -------
+    int or None
+        Number of spatial dimensions (2 or 3), or None if spacing not provided
+    """
+    if spacing is None:
+        return None
+    return len(spacing)

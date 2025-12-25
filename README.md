@@ -16,6 +16,32 @@ A PyTorch-native library for computing, aggregating, and visualizing evaluation 
 - **💻 Clean APIs**: Both Python API and CLI for batch evaluation
 - **🚫 No PHI**: Designed with privacy in mind, no protected health information handling
 
+## Conventions
+
+### Input Shape Support
+
+| Input Shape | Interpretation | Normalized Shape |
+|-------------|----------------|------------------|
+| `(H, W)` | 2D single image | `(1, 1, H, W)` |
+| `(B, H, W)` | 2D batch (B≤4) | `(B, 1, H, W)` |
+| `(B, C, H, W)` | 2D batch+channel | unchanged |
+| `(Z, Y, X)` | 3D single volume (Z>4) | `(1, 1, Z, Y, X)` |
+| `(B, Z, Y, X)` | 3D batch (Z>4) | `(B, 1, Z, Y, X)` |
+| `(B, C, Z, Y, X)` | 3D batch+channel | unchanged |
+
+> **Note**: For 3-dim inputs, a heuristic distinguishes 2D-batched from 3D-unbatched by the first dimension size (threshold: 4). Use explicit 4D/5D shapes or provide `spacing` to disambiguate.
+
+### Spacing Axis Order
+
+- **2D**: `(dy, dx)` — row spacing, column spacing
+- **3D**: `(dz, dy, dx)` — slice spacing, row spacing, column spacing
+
+### Surface Metrics
+
+Surface-based metrics (Hausdorff, ASSD, Surface Dice) require physical `spacing`. Without spacing:
+- **Default**: metrics are skipped (no error, logged as skipped)
+- **Strict mode**: use `require_spacing=True` to raise `ValueError`
+
 ## Installation
 
 ```bash

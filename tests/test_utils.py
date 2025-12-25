@@ -8,7 +8,9 @@ from medeval.core.utils import (
     apply_spacing,
     compute_one_hot,
     compute_weights,
+    get_spatial_dims_from_spacing,
     label_mapping,
+    normalize_input_shapes,
     reduce_metrics,
     sample_with_spacing,
 )
@@ -135,4 +137,149 @@ def test_reduce_metrics_per_class():
     assert reduced.shape == (2,)
     expected = metrics.mean(dim=0)
     assert torch.allclose(reduced, expected)
+
+
+class TestNormalizeInputShapes:
+    """Tests for normalize_input_shapes function."""
+
+    # ===== Shape normalization tests =====
+
+    def test_2d_unbatched(self):
+        """Test 2D unbatched input: (H, W) -> (1, 1, H, W)."""
+        pred = torch.rand(64, 64)
+        target = torch.rand(64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (1, 1, 64, 64)
+        assert t.shape == (1, 1, 64, 64)
+        assert spatial_dims == 2
+        assert sp is None
+
+    def test_2d_batched_no_channel(self):
+        """Test 2D batched without channel: (B, H, W) -> (B, 1, H, W)."""
+        pred = torch.rand(4, 64, 64)
+        target = torch.rand(4, 64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (4, 1, 64, 64)
+        assert t.shape == (4, 1, 64, 64)
+        assert spatial_dims == 2
+
+    def test_2d_batched_with_channel(self):
+        """Test 2D batched with channel: (B, C, H, W) -> unchanged."""
+        pred = torch.rand(2, 3, 64, 64)
+        target = torch.rand(2, 3, 64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (2, 3, 64, 64)
+        assert t.shape == (2, 3, 64, 64)
+        assert spatial_dims == 2
+
+    def test_3d_unbatched(self):
+        """Test 3D unbatched input: (Z, Y, X) -> (1, 1, Z, Y, X)."""
+        pred = torch.rand(32, 64, 64)  # Z=32 > 4, so treated as 3D
+        target = torch.rand(32, 64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (1, 1, 32, 64, 64)
+        assert t.shape == (1, 1, 32, 64, 64)
+        assert spatial_dims == 3
+
+    def test_3d_batched_no_channel(self):
+        """Test 3D batched without channel: (B, Z, Y, X) -> (B, 1, Z, Y, X)."""
+        pred = torch.rand(2, 32, 64, 64)  # axis-1=32 > 4, so treated as 3D
+        target = torch.rand(2, 32, 64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (2, 1, 32, 64, 64)
+        assert t.shape == (2, 1, 32, 64, 64)
+        assert spatial_dims == 3
+
+    def test_3d_batched_with_channel(self):
+        """Test 3D batched with channel: (B, C, Z, Y, X) -> unchanged."""
+        pred = torch.rand(2, 1, 32, 64, 64)
+        target = torch.rand(2, 1, 32, 64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target)
+        assert p.shape == (2, 1, 32, 64, 64)
+        assert t.shape == (2, 1, 32, 64, 64)
+        assert spatial_dims == 3
+
+    # ===== Spacing validation tests =====
+
+    def test_spacing_valid_2d(self):
+        """Test valid 2D spacing."""
+        pred = torch.rand(64, 64)
+        target = torch.rand(64, 64)
+        spacing = (0.5, 0.5)  # (dy, dx)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target, spacing=spacing)
+        assert spatial_dims == 2
+        assert sp == spacing
+
+    def test_spacing_valid_3d(self):
+        """Test valid 3D spacing."""
+        pred = torch.rand(32, 64, 64)
+        target = torch.rand(32, 64, 64)
+        spacing = (2.0, 0.5, 0.5)  # (dz, dy, dx)
+        p, t, spatial_dims, sp = normalize_input_shapes(pred, target, spacing=spacing)
+        assert spatial_dims == 3
+        assert sp == spacing
+
+    def test_spacing_mismatch_raises(self):
+        """Test that mismatched spacing raises ValueError."""
+        pred = torch.rand(64, 64)  # 2D
+        target = torch.rand(64, 64)
+        spacing = (1.0, 1.0, 1.0)  # 3D spacing for 2D image
+        with pytest.raises(ValueError, match="Spacing dimension"):
+            normalize_input_shapes(pred, target, spacing=spacing)
+
+    def test_require_spacing_none_raises(self):
+        """Test that require_spacing=True with spacing=None raises ValueError."""
+        pred = torch.rand(64, 64)
+        target = torch.rand(64, 64)
+        with pytest.raises(ValueError, match="Spacing is required"):
+            normalize_input_shapes(pred, target, spacing=None, require_spacing=True)
+
+    def test_require_spacing_false_allows_none(self):
+        """Test that require_spacing=False allows spacing=None."""
+        pred = torch.rand(64, 64)
+        target = torch.rand(64, 64)
+        p, t, spatial_dims, sp = normalize_input_shapes(
+            pred, target, spacing=None, require_spacing=False
+        )
+        assert sp is None  # No error, spacing remains None
+
+    # ===== dtype/device contract tests =====
+
+    def test_pred_dtype_float32(self):
+        """Test that pred is always converted to float32."""
+        pred = torch.randint(0, 2, (64, 64), dtype=torch.int64)
+        target = torch.randint(0, 2, (64, 64), dtype=torch.int64)
+        p, t, _, _ = normalize_input_shapes(pred, target)
+        assert p.dtype == torch.float32
+
+    def test_target_dtype_preserved(self):
+        """Test that target keeps its original dtype (for label maps)."""
+        pred = torch.rand(64, 64)
+        target = torch.randint(0, 5, (64, 64), dtype=torch.int64)
+        p, t, _, _ = normalize_input_shapes(pred, target)
+        assert t.dtype == torch.int64  # Original dtype preserved
+
+    def test_device_alignment(self):
+        """Test that target is moved to pred's device."""
+        pred = torch.rand(64, 64)
+        target = torch.rand(64, 64)
+        # Both on CPU by default, test passes if no error
+        p, t, _, _ = normalize_input_shapes(pred, target)
+        assert p.device == t.device
+
+
+class TestGetSpatialDimsFromSpacing:
+    """Tests for get_spatial_dims_from_spacing helper."""
+
+    def test_none_spacing(self):
+        """Test that None spacing returns None."""
+        assert get_spatial_dims_from_spacing(None) is None
+
+    def test_2d_spacing(self):
+        """Test 2D spacing returns 2."""
+        assert get_spatial_dims_from_spacing((1.0, 1.0)) == 2
+
+    def test_3d_spacing(self):
+        """Test 3D spacing returns 3."""
+        assert get_spatial_dims_from_spacing((1.0, 1.0, 1.0)) == 3
 

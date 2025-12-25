@@ -11,12 +11,42 @@ import yaml
 
 from medeval.cli.evaluate import evaluate_command
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# Configure logging - will be adjusted by verbosity flag
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging(verbosity: int) -> None:
+    """Configure logging based on verbosity level.
+
+    Parameters
+    ----------
+    verbosity : int
+        0 = WARNING, 1 = INFO, 2+ = DEBUG
+    """
+    if verbosity >= 2:
+        level = logging.DEBUG
+    elif verbosity == 1:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
+    # Configure root logger and all handlers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # Clear existing handlers and add a properly configured one
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(level)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+    else:
+        # Update existing handlers' levels
+        for handler in root_logger.handlers:
+            handler.setLevel(level)
 
 
 def load_config(config_path: Path) -> dict:
@@ -79,7 +109,8 @@ def main(args: Optional[list] = None) -> int:
     eval_parser.add_argument(
         "--output",
         type=Path,
-        help="Output directory for results",
+        help="Output directory for results. Re-running with the same directory will "
+             "overwrite existing files; use a new directory for each run to preserve results.",
     )
     eval_parser.add_argument(
         "--task",
@@ -90,8 +121,9 @@ def main(args: Optional[list] = None) -> int:
     eval_parser.add_argument(
         "--verbose",
         "-v",
-        action="store_true",
-        help="Verbose output",
+        action="count",
+        default=0,
+        help="Verbose output (-v for INFO, -vv for DEBUG)",
     )
 
     # Parse arguments
@@ -101,9 +133,8 @@ def main(args: Optional[list] = None) -> int:
         parser.print_help()
         return 1
 
-    # Set logging level
-    if parsed_args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # Configure logging based on verbosity
+    _configure_logging(parsed_args.verbose)
 
     # Load config if provided
     config = {}
@@ -117,7 +148,7 @@ def main(args: Optional[list] = None) -> int:
             logger.error(f"Unknown command: {parsed_args.command}")
             return 1
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=parsed_args.verbose)
+        logger.error(f"Error: {e}", exc_info=parsed_args.verbose >= 1)
         return 1
 
 

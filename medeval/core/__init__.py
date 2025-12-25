@@ -53,7 +53,9 @@ from medeval.core.utils import (
     apply_spacing,
     compute_one_hot,
     compute_weights,
+    get_spatial_dims_from_spacing,
     label_mapping,
+    normalize_input_shapes,
     reduce_metrics,
     sample_with_spacing,
 )
@@ -78,6 +80,8 @@ __all__ = [
     "compute_one_hot",
     "reduce_metrics",
     "compute_weights",
+    "normalize_input_shapes",
+    "get_spatial_dims_from_spacing",
     # IO
     "load_image",
     "save_image",

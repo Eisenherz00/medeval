@@ -3,20 +3,57 @@
 import json
 import logging
 import math
+import platform
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from tqdm import tqdm
 
+import medeval
 from medeval.core.aggregate import aggregate_metrics, stratified_aggregate
 from medeval.core.containers import EvaluationBatch, MedicalPrediction
 from medeval.core.io import get_nifti_spacing, load_image, load_nifti
 from medeval.core.typing import Tensor
 
 logger = logging.getLogger(__name__)
+
+
+def _get_version_fingerprint() -> Dict[str, str]:
+    """Get version fingerprint for reproducibility.
+
+    Returns
+    -------
+    Dict[str, str]
+        Dictionary with version information
+    """
+    fingerprint = {
+        "medeval_version": medeval.__version__,
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "numpy_version": np.__version__,
+        "platform": platform.platform(),
+    }
+
+    # Try to get git commit hash (optional, fail silently)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            fingerprint["git_commit"] = result.stdout.strip()[:12]  # Short hash
+    except Exception:
+        pass
+
+    return fingerprint
 
 
 def _load_prediction_target(
@@ -673,6 +710,26 @@ def evaluate_command(args, config: Dict) -> int:
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2, default=str)
     logger.info(f"Summary saved to {summary_path}")
+
+    # Save resolved config for reproducibility
+    resolved_config = {
+        "task": task,
+        "manifest": str(manifest_path),
+        "columns": col_config,
+        "metrics": metric_config,
+        "aggregation": {
+            "method": "mean",
+            "ci_method": "bootstrap",
+            "confidence": confidence,
+            "n_bootstrap": n_bootstrap,
+            "seed": agg_config.get("seed", 42),
+        },
+        "environment": _get_version_fingerprint(),
+    }
+    config_path = output_dir / "run_config_resolved.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(resolved_config, f, default_flow_style=False, sort_keys=False)
+    logger.info(f"Resolved config saved to {config_path}")
 
     # Print summary to console
     _print_summary(summary)
