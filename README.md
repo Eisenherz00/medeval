@@ -112,6 +112,60 @@ This will:
 
 This demo is the **best starting point** to understand MedEval’s design, APIs, and evaluation philosophy.
 
+## Evaluation Scope and Design Philosophy
+
+MedEval evaluates **one experiment (one model’s predictions) per run**.
+
+It is intentionally designed to be:
+- **Model-agnostic**: MedEval does not know or assume how predictions were generated.
+- **Metric-neutral**: It computes metrics but does not decide which metric “matters most”.
+- **Decision-neutral**: It does not declare a “best model”.
+
+This design reflects real-world medical research and deployment practice, where:
+- Different metrics capture different clinical trade-offs.
+- Performance may vary across patients, strata (e.g. sites/scanners), or endpoints.
+- Model selection and conclusions depend on study-specific goals, not on the evaluation tool itself.
+
+MedEval’s role is to produce **reliable, comparable, and statistically sound evaluation artifacts**  
+(CSV/JSON summaries, confidence intervals, plots) that enable downstream analysis.
+
+## Multi-Model Comparison (External Analysis Layer)
+
+While MedEval evaluates one model per run, it is **explicitly designed to support multi-model comparison** at a higher analysis layer.
+
+The recommended workflow is:
+
+1. Run MedEval **once per model**, using the same evaluation protocol.
+2. Store each model’s outputs (CSVs, JSON summaries, plots).
+3. Compare models using a separate analysis script or notebook.
+
+### Recommended Directory Structure
+
+```
+experiments/
+├── model_A/
+│   └── out_example/
+│       ├── segmentation_results.csv
+│       ├── segmentation_summary_by_strata.csv
+│       ├── classification_results.json
+│       └── plots/
+├── model_B/
+│   └── out_example/
+├── model_C/
+│   └── out_example/
+└── compare_models.ipynb
+```
+
+In this structure:
+- **MedEval** is responsible only for generating per-model evaluation results.
+- **compare_models.ipynb** (or an equivalent script) performs:
+  - Cross-model aggregation
+  - Statistical testing
+  - Visualization of differences
+  - Study-specific conclusions
+
+This separation keeps MedEval reusable, transparent, and scientifically neutral.
+
 ## Quick Start
 
 ### Segmentation Evaluation
