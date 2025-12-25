@@ -25,10 +25,20 @@ from medeval.core.aggregate import bootstrap_ci
 from medeval.core.typing import ArrayLike, Device, Tensor, as_tensor
 from medeval.core.utils import ReductionType, reduce_metrics
 
+
 try:
     from scipy.stats import norm
 except ImportError:
     norm = None
+
+
+# Helper: trapezoidal integration compatible with NumPy 1.x and 2.x
+def _trapz(y: np.ndarray, x: np.ndarray) -> float:
+    """Trapezoidal integration compatible with NumPy 1.x and 2.x."""
+    # NumPy 2.0 removed np.trapz; replacement is np.trapezoid
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
 
 
 def _delong_auc_variance(y_true: np.ndarray, y_scores: np.ndarray) -> float:
@@ -235,7 +245,7 @@ def auprc(
             if np.sum(y_true_c) > 0:
                 precision, recall, _ = precision_recall_curve(y_true_c, pred[:, c])
                 # Compute AUC using trapezoidal rule
-                auprc_c = np.trapz(precision, recall)
+                auprc_c = _trapz(precision, recall)
                 class_scores.append(auprc_c)
 
         if average == "macro":
@@ -249,7 +259,7 @@ def auprc(
             precision, recall, _ = precision_recall_curve(
                 y_true_binary.ravel(), pred.ravel()
             )
-            auprc_score = np.trapz(precision, recall)
+            auprc_score = _trapz(precision, recall)
     else:
         # Binary case
         if pred.ndim > 1:
@@ -263,7 +273,7 @@ def auprc(
             precision, recall, _ = precision_recall_curve(target, pred)
             # Sort by recall ascending for proper trapz integration
             sorted_idx = np.argsort(recall)
-            auprc_score = np.trapz(precision[sorted_idx], recall[sorted_idx])
+            auprc_score = _trapz(precision[sorted_idx], recall[sorted_idx])
         else:
             auprc_score = 0.0
 
