@@ -1209,25 +1209,72 @@ def group_by_patient(
     patient_ids = as_tensor(patient_ids).cpu().numpy()
 
     unique_patients = np.unique(patient_ids)
-    aggregated_preds = []
-    aggregated_targets = []
+    aggregated_preds: List[torch.Tensor] = []
+    aggregated_targets: List[torch.Tensor] = []
+
+    # Helper: aggregate discrete (integer/bool) targets robustly
+    def _agg_discrete_target(x: torch.Tensor, how: Literal["mean", "max", "min"]) -> torch.Tensor:
+        """Aggregate discrete targets per patient.
+
+        - For integer class indices (shape (K,) or (K,1)): 
+          - mean -> majority vote (mode)
+          - max/min -> max/min
+        - For one-hot encoded discrete targets (shape (K, C), integer/bool):
+          - mean -> mean in float (keeps (C,) with class prevalence)
+          - max/min -> max/min (keeps (C,))
+
+        Returns a tensor with the same trailing shape as a single target entry.
+        """
+        # One-hot / multi-label style targets (last dim > 1)
+        if x.dim() > 1 and x.shape[-1] > 1:
+            if how == "mean":
+                return x.float().mean(dim=0)
+            if how == "max":
+                return x.max(dim=0).values
+            if how == "min":
+                return x.min(dim=0).values
+            raise ValueError(f"Unknown aggregation: {how}")
+
+        # Class-index / binary labels
+        if x.dim() > 1 and x.shape[-1] == 1:
+            x = x.squeeze(-1)
+
+        if how == "mean":
+            # Majority vote (mode). Works for binary and multi-class integer labels.
+            return torch.mode(x.long(), dim=0).values
+        if how == "max":
+            return x.max(dim=0).values
+        if how == "min":
+            return x.min(dim=0).values
+        raise ValueError(f"Unknown aggregation: {how}")
 
     for patient_id in unique_patients:
         mask = patient_ids == patient_id
         patient_pred = pred[mask]
         patient_target = target[mask]
 
+        # Aggregate predictions
         if aggregation == "mean":
             agg_pred = patient_pred.mean(dim=0)
-            agg_target = patient_target.mean(dim=0)
         elif aggregation == "max":
-            agg_pred = patient_pred.max(dim=0)[0]
-            agg_target = patient_target.max(dim=0)[0]
+            agg_pred = patient_pred.max(dim=0).values
         elif aggregation == "min":
-            agg_pred = patient_pred.min(dim=0)[0]
-            agg_target = patient_target.min(dim=0)[0]
+            agg_pred = patient_pred.min(dim=0).values
         else:
             raise ValueError(f"Unknown aggregation: {aggregation}")
+
+        # Aggregate targets safely (avoid .mean() on integer labels)
+        if patient_target.is_floating_point() or patient_target.is_complex():
+            if aggregation == "mean":
+                agg_target = patient_target.mean(dim=0)
+            elif aggregation == "max":
+                agg_target = patient_target.max(dim=0).values
+            elif aggregation == "min":
+                agg_target = patient_target.min(dim=0).values
+            else:
+                raise ValueError(f"Unknown aggregation: {aggregation}")
+        else:
+            agg_target = _agg_discrete_target(patient_target, aggregation)
 
         aggregated_preds.append(agg_pred)
         aggregated_targets.append(agg_target)

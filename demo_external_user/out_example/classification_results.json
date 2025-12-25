@@ -1,0 +1,14 @@
+{
+  "sample_level": {
+    "auroc": 0.9575109649122806,
+    "auprc": 0.8817322466434299,
+    "accuracy": 0.875,
+    "ece": 0.519218385219574,
+    "n_samples": 200,
+    "prevalence": 0.24
+  },
+  "patient_level": {
+    "auroc": 1.0,
+    "n_patients": 50
+  }
+}

@@ -1,0 +1,23 @@
+# CLI configuration for segmentation evaluation
+task: segmentation
+
+columns:
+  prediction: prediction
+  target: target
+  spacing: spacing
+  patient_id: patient_id
+  strata: strata
+
+metrics:
+  threshold: 0.5
+  include_surface: true
+  include_calibration: false
+
+aggregation:
+  method: mean
+  compute_ci: true
+  ci_method: bootstrap
+  confidence: 0.95
+  n_bootstrap: 100  # small for demo speed
+  seed: 42
+

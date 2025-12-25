@@ -365,16 +365,16 @@ def plot_multiple_pr_curves(
         colors = plt.cm.tab10.colors
 
         for i, curve in enumerate(curves):
-        color = colors[i % len(colors)]  # type: ignore
-        plot_pr_curve(
-            recall=curve["recall"],
-            precision=curve["precision"],
-            auprc=float(curve["auprc"]) if "auprc" in curve and curve["auprc"] is not None else None,
-            label=str(curve.get("label", f"Model {i+1}")),
-            ax=ax,
-            color=color,
-            show_baseline=(i == 0),
-        )
+            color = colors[i % len(colors)]  # type: ignore
+            plot_pr_curve(
+                recall=curve["recall"],
+                precision=curve["precision"],
+                auprc=float(curve["auprc"]) if "auprc" in curve and curve["auprc"] is not None else None,
+                label=str(curve.get("label", f"Model {i+1}")),
+                ax=ax,
+                color=color,
+                show_baseline=(i == 0),
+            )
 
     ax.set_title(title or "Precision-Recall Curves Comparison", fontsize=14)
 

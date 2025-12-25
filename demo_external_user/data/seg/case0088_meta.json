@@ -1,0 +1,21 @@
+{
+  "case_id": "case0088",
+  "patient_id": "patient_045",
+  "strata": "stratum_A",
+  "spacing": [
+    3.0,
+    1.0,
+    1.0
+  ],
+  "shape": [
+    32,
+    96,
+    96
+  ],
+  "description": "Synthetic binary segmentation: sphere GT vs shifted sphere + optional FP blob",
+  "shift": [
+    1,
+    -3,
+    3
+  ]
+}

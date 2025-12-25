@@ -55,6 +55,63 @@ pip install medeval[dicom]
 pip install -e ".[dev]"
 ```
 
+### Quick demo (no data needed)
+python demo_external_user/gen_data.py
+python demo_external_user/run_python_api.py
+bash demo_external_user/run_cli.sh
+
+## End-to-End Demo (External User Perspective)
+
+The `demo_external_user/` directory provides a **realistic, end-to-end example** of how an external user would interact with MedEval using their own data.  
+It demonstrates **data preparation → evaluation → aggregation → visualization** using both the Python API and the CLI.
+
+### What This Demo Simulates
+- Multiple **patients**, **cases**, and **strata** (e.g. sites/scanners)
+- 3D segmentation with physical voxel spacing
+- Binary classification with per-patient aggregation
+- Per-case metrics, stratified summaries, and plots
+
+### Demo Structure
+
+```
+demo_external_user/
+├── gen_data.py              # Generate synthetic medical data + manifests
+├── manifest_seg.csv         # Segmentation manifest (100 cases, patients, strata)
+├── run_example.py           # Main end-to-end Python workflow (recommended)
+├── run_python_api.py        # Minimal direct API usage example
+├── run_cli.sh               # CLI-based evaluation example
+├── config_seg.yaml          # CLI configuration
+├── data/                    # Generated synthetic inputs
+└── out_example/             # Outputs: CSVs, JSON, plots
+```
+
+### Recommended Entry Point
+
+Run the full example as a real user would:
+
+```bash
+python demo_external_user/gen_data.py
+python demo_external_user/run_example.py
+```
+
+This will:
+- Load a segmentation manifest with **100 cases**
+- Compute per-case metrics (Dice, HD95, ASSD, etc.)
+- Aggregate results by **strata**
+- Compute classification metrics (sample-level + patient-level)
+- Save CSV/JSON outputs
+- Generate plots (Dice distribution, HD95 histogram, ROC, calibration)
+
+### Typical Outputs
+
+- `segmentation_results.csv` — per-case metrics  
+- `segmentation_summary_by_strata.csv` — aggregated statistics  
+- `classification_results.json` — sample-level and patient-level metrics  
+- `dice_hist.png`, `dice_by_strata_box.png`, `hd95_hist.png`  
+- `roc_curve.png`, `reliability_diagram.png`
+
+This demo is the **best starting point** to understand MedEval’s design, APIs, and evaluation philosophy.
+
 ## Quick Start
 
 ### Segmentation Evaluation

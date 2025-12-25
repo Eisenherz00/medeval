@@ -1,0 +1,13 @@
+{
+  "spacing": [
+    3.0,
+    1.0,
+    1.0
+  ],
+  "shape": [
+    32,
+    96,
+    96
+  ],
+  "description": "Synthetic binary segmentation: sphere GT vs shifted sphere + FP blob"
+}

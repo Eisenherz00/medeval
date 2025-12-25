@@ -1,0 +1,2 @@
+index,status,patient_id,strata,dice,jaccard,precision,recall,volumetric_similarity,hausdorff,hausdorff_95,assd,surface_dice,_surface_metrics_skipped
+0,success,patient_001,stratum_A,0.8093112707138062,0.6797001361846924,0.7952766418457031,0.823850154876709,0.9823525547981262,33.0756721496582,2.8284270763397217,2.360839605331421,0.49349841475486755,0.0

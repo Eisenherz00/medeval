@@ -1,0 +1,151 @@
+{
+  "task": "segmentation",
+  "n_samples": 1,
+  "n_processed": 1,
+  "n_errors": 0,
+  "config": {
+    "task": "segmentation",
+    "columns": {
+      "prediction": "prediction",
+      "target": "target",
+      "spacing": "spacing",
+      "patient_id": "patient_id",
+      "strata": "strata"
+    },
+    "metrics": {
+      "threshold": 0.5,
+      "include_surface": true,
+      "include_calibration": false
+    },
+    "aggregation": {
+      "method": "mean",
+      "compute_ci": true,
+      "ci_method": "bootstrap",
+      "confidence": 0.95,
+      "n_bootstrap": 100,
+      "seed": 42
+    }
+  },
+  "metrics": {
+    "dice": {
+      "mean": 0.8093112707138062,
+      "ci_lower": 0.8093112707138062,
+      "ci_upper": 0.8093112707138062,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.8093112707138062,
+      "iqr": [
+        0.8093112707138062,
+        0.8093112707138062
+      ]
+    },
+    "jaccard": {
+      "mean": 0.6797001361846924,
+      "ci_lower": 0.6797001361846924,
+      "ci_upper": 0.6797001361846924,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.6797001361846924,
+      "iqr": [
+        0.6797001361846924,
+        0.6797001361846924
+      ]
+    },
+    "precision": {
+      "mean": 0.7952766418457031,
+      "ci_lower": 0.7952766418457031,
+      "ci_upper": 0.7952766418457031,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.7952766418457031,
+      "iqr": [
+        0.7952766418457031,
+        0.7952766418457031
+      ]
+    },
+    "recall": {
+      "mean": 0.823850154876709,
+      "ci_lower": 0.823850154876709,
+      "ci_upper": 0.823850154876709,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.823850154876709,
+      "iqr": [
+        0.823850154876709,
+        0.823850154876709
+      ]
+    },
+    "volumetric_similarity": {
+      "mean": 0.9823525547981262,
+      "ci_lower": 0.9823525547981262,
+      "ci_upper": 0.9823525547981262,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.9823525547981262,
+      "iqr": [
+        0.9823525547981262,
+        0.9823525547981262
+      ]
+    },
+    "hausdorff": {
+      "mean": 33.0756721496582,
+      "ci_lower": 33.0756721496582,
+      "ci_upper": 33.0756721496582,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 33.0756721496582,
+      "iqr": [
+        33.0756721496582,
+        33.0756721496582
+      ]
+    },
+    "hausdorff_95": {
+      "mean": 2.8284270763397217,
+      "ci_lower": 2.8284270763397217,
+      "ci_upper": 2.8284270763397217,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 2.8284270763397217,
+      "iqr": [
+        2.8284270763397217,
+        2.8284270763397217
+      ]
+    },
+    "assd": {
+      "mean": 2.360839605331421,
+      "ci_lower": 2.360839605331421,
+      "ci_upper": 2.360839605331421,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 2.360839605331421,
+      "iqr": [
+        2.360839605331421,
+        2.360839605331421
+      ]
+    },
+    "surface_dice": {
+      "mean": 0.49349841475486755,
+      "ci_lower": 0.49349841475486755,
+      "ci_upper": 0.49349841475486755,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.49349841475486755,
+      "iqr": [
+        0.49349841475486755,
+        0.49349841475486755
+      ]
+    },
+    "_surface_metrics_skipped": {
+      "mean": 0.0,
+      "ci_lower": 0.0,
+      "ci_upper": 0.0,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 0.0,
+      "iqr": [
+        0.0,
+        0.0
+      ]
+    }
+  }
+}

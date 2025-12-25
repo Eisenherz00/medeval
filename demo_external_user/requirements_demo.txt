@@ -1,0 +1,4 @@
+# Use repo extras: pip install -e ".[all]"
+# Or minimal: nibabel is needed for NIfTI support
+nibabel>=3.0
+

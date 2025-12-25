@@ -1,0 +1,26 @@
+task: segmentation
+manifest: demo_external_user/manifest_seg.csv
+columns:
+  prediction: prediction
+  target: target
+  spacing: spacing
+  patient_id: patient_id
+  strata: strata
+metrics:
+  threshold: 0.5
+  include_surface: true
+  include_calibration: false
+aggregation:
+  method: mean
+  ci_method: bootstrap
+  confidence: 0.95
+  n_bootstrap: 100
+  seed: 42
+environment:
+  medeval_version: 0.1.0
+  python_version: 3.14.0
+  torch_version: !!python/object/new:torch.torch_version.TorchVersion
+  - 2.9.1
+  numpy_version: 2.4.0
+  platform: macOS-14.7.8-arm64-arm-64bit-Mach-O
+  git_commit: 0733bf30806a
