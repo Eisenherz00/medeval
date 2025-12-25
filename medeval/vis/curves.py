@@ -310,15 +310,15 @@ def plot_multiple_roc_curves(
         colors = plt.cm.tab10.colors
 
         for i, curve in enumerate(curves):
-        color = colors[i % len(colors)]  # type: ignore
-        plot_roc_curve(
-            fpr=curve["fpr"],
-            tpr=curve["tpr"],
-            auc=float(curve["auc"]) if "auc" in curve and curve["auc"] is not None else None,
-            label=str(curve.get("label", f"Model {i+1}")),
-            ax=ax,
-            color=color,
-            show_diagonal=(i == 0),  # Only show diagonal once
+            color = colors[i % len(colors)]  # type: ignore
+            plot_roc_curve(
+                fpr=curve["fpr"],
+                tpr=curve["tpr"],
+                auc=float(curve["auc"]) if "auc" in curve and curve["auc"] is not None else None,
+                label=str(curve.get("label", f"Model {i+1}")),
+                ax=ax,
+                color=color,
+                show_diagonal=(i == 0),  # Only show diagonal once
         )
 
     ax.set_title(title or "ROC Curves Comparison", fontsize=14)

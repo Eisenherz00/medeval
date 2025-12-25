@@ -28,6 +28,7 @@ from medeval.core.containers import MedicalPrediction
 
 # Optional visualization (requires matplotlib)
 try:
+    import matplotlib.pyplot as plt
     from medeval.vis import (
         plot_segmentation_overlay,
         plot_prediction_comparison,

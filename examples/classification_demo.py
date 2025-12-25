@@ -34,6 +34,7 @@ from medeval.core.aggregate import aggregate_metrics, bootstrap_ci
 
 # Optional visualization
 try:
+    import matplotlib.pyplot as plt
     from medeval.vis import (
         plot_roc_curve,
         plot_pr_curve,
