@@ -112,8 +112,13 @@ def _compute_segmentation_metrics(
     )
 
     # Convert tensors to floats
-    return {k: float(v.mean().item()) if isinstance(v, torch.Tensor) else float(v) 
-            for k, v in results.items()}
+    output = {}
+    for k, v in results.items():
+        if isinstance(v, torch.Tensor):
+            output[k] = float(v.mean().item() if v.numel() > 1 else v.item())
+        else:
+            output[k] = float(v)
+    return output
 
 
 def _compute_classification_metrics(
@@ -136,7 +141,12 @@ def _compute_classification_metrics(
     output = {}
     for k, v in results.items():
         if isinstance(v, torch.Tensor):
-            output[k] = float(v.mean().item())
+            # Handle both scalar and multi-element tensors
+            tensor_v: torch.Tensor = v  # Type narrowing for type checker
+            if tensor_v.numel() > 1:
+                output[k] = float(tensor_v.mean().item())
+            else:
+                output[k] = float(tensor_v.item())
         elif isinstance(v, tuple):
             output[k] = float(v[0])  # Take value, not CI
         else:
@@ -152,10 +162,9 @@ def _compute_detection_metrics(
     """Compute detection metrics for a single case."""
     # Detection requires special handling for boxes/scores
     # This is a simplified version
-    results = {
-        "status": "detection_not_fully_implemented",
+    return {
+        "status_code": 0.0,  # Placeholder until fully implemented
     }
-    return results
 
 
 def _compute_registration_metrics(
@@ -194,6 +203,223 @@ TASK_METRICS = {
 }
 
 
+def _load_manifest(manifest_path: Path) -> pd.DataFrame:
+    """
+    Load manifest from CSV or JSON file.
+
+    Parameters
+    ----------
+    manifest_path : Path
+        Path to manifest file
+
+    Returns
+    -------
+    pd.DataFrame
+        Loaded manifest as DataFrame
+    """
+    if manifest_path.suffix == ".csv":
+        return pd.read_csv(manifest_path)
+    elif manifest_path.suffix == ".json":
+        return pd.read_json(manifest_path)
+    else:
+        raise ValueError(f"Unsupported manifest format: {manifest_path.suffix}")
+
+
+def _validate_manifest(df: pd.DataFrame, required_cols: List[str]) -> None:
+    """
+    Validate manifest has required columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Manifest DataFrame
+    required_cols : List[str]
+        List of required column names
+
+    Raises
+    ------
+    ValueError
+        If any required column is missing
+    """
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {', '.join(missing_cols)}")
+
+
+def _process_single_case(
+    row: pd.Series,
+    idx: int,
+    metric_fn: Callable,
+    metric_config: Dict[str, Any],
+    col_config: Dict[str, str],
+) -> Tuple[Dict[str, Any], Optional[Dict[str, float]], Optional[str]]:
+    """
+    Process a single case and return metrics.
+
+    Parameters
+    ----------
+    row : pd.Series
+        Manifest row
+    idx : int
+        Row index
+    metric_fn : Callable
+        Metric computation function
+    metric_config : Dict[str, Any]
+        Metric configuration
+    col_config : Dict[str, str]
+        Column name mappings
+
+    Returns
+    -------
+    Tuple[Dict[str, Any], Optional[Dict[str, float]], Optional[str]]
+        (result_dict, metrics_dict, strata)
+    """
+    try:
+        # Load prediction and target
+        pred, target = _load_prediction_target(
+            row,
+            pred_col=col_config["prediction"],
+            target_col=col_config["target"],
+            spacing_col=col_config.get("spacing"),
+            patient_col=col_config.get("patient_id"),
+            strata_col=col_config.get("strata"),
+        )
+
+        # Compute metrics
+        metrics = metric_fn(pred, target, metric_config)
+
+        # Build result dict
+        result = {
+            "index": idx,
+            "status": "success",
+            "patient_id": pred.patient_id,
+            "strata": pred.strata,
+            **metrics,
+        }
+
+        return result, metrics, pred.strata
+
+    except Exception as e:
+        logger.warning(f"Error processing row {idx}: {e}")
+        return {
+            "index": idx,
+            "status": "error",
+            "error": str(e),
+        }, None, None
+
+
+def _save_results(all_results: List[Dict[str, Any]], output_dir: Path) -> None:
+    """
+    Save per-case results to CSV.
+
+    Parameters
+    ----------
+    all_results : List[Dict[str, Any]]
+        List of result dictionaries
+    output_dir : Path
+        Output directory
+    """
+    results_df = pd.DataFrame(all_results)
+    results_path = output_dir / "results.csv"
+    results_df.to_csv(results_path, index=False)
+    logger.info(f"Per-case results saved to {results_path}")
+
+
+def _compute_summary(
+    task: str,
+    df: pd.DataFrame,
+    all_results: List[Dict[str, Any]],
+    all_metrics: Dict[str, List[float]],
+    aggregated: Dict[str, Union[float, Tuple[float, float, float]]],
+    stratified_results: Optional[Dict],
+    config: Dict,
+) -> Dict[str, Any]:
+    """
+    Compute aggregated summary with statistics.
+
+    Parameters
+    ----------
+    task : str
+        Task name
+    df : pd.DataFrame
+        Original manifest DataFrame
+    all_results : List[Dict[str, Any]]
+        All per-case results
+    all_metrics : Dict[str, List[float]]
+        Accumulated metrics
+    aggregated : Dict[str, Union[float, Tuple[float, float, float]]]
+        Aggregated metrics with CI
+    stratified_results : Optional[Dict]
+        Stratified aggregation results
+    config : Dict
+        Configuration dictionary
+
+    Returns
+    -------
+    Dict[str, Any]
+        Summary dictionary
+    """
+    summary = {
+        "task": task,
+        "n_samples": len(df),
+        "n_processed": len([r for r in all_results if r.get("status") == "success"]),
+        "n_errors": len([r for r in all_results if r.get("status") == "error"]),
+        "config": config,
+        "metrics": {
+            k: {
+                "mean": v[0] if isinstance(v, tuple) else v,
+                "ci_lower": v[1] if isinstance(v, tuple) else None,
+                "ci_upper": v[2] if isinstance(v, tuple) else None,
+            }
+            for k, v in aggregated.items()
+        },
+    }
+
+    if stratified_results:
+        summary["stratified_metrics"] = stratified_results
+
+    # Compute additional statistics
+    for metric_name, values in all_metrics.items():
+        values_arr = np.array(values)
+        summary["metrics"][metric_name]["std"] = float(np.std(values_arr))
+        summary["metrics"][metric_name]["median"] = float(np.median(values_arr))
+        summary["metrics"][metric_name]["iqr"] = [
+            float(np.percentile(values_arr, 25)),
+            float(np.percentile(values_arr, 75)),
+        ]
+
+    return summary
+
+
+def _print_summary(summary: Dict[str, Any]) -> None:
+    """
+    Print evaluation summary to console.
+
+    Parameters
+    ----------
+    summary : Dict[str, Any]
+        Summary dictionary
+    """
+    task = summary["task"]
+    print("\n" + "=" * 60)
+    print(f"EVALUATION SUMMARY - {task.upper()}")
+    print("=" * 60)
+    print(f"Processed: {summary['n_processed']}/{summary['n_samples']} cases")
+    if summary['n_errors'] > 0:
+        print(f"Errors: {summary['n_errors']}")
+    print("-" * 60)
+    print("METRICS (mean [95% CI]):")
+    for metric_name, metric_data in summary["metrics"].items():
+        mean = metric_data["mean"]
+        ci_lower = metric_data.get("ci_lower")
+        ci_upper = metric_data.get("ci_upper")
+        if ci_lower is not None and ci_upper is not None:
+            print(f"  {metric_name}: {mean:.4f} [{ci_lower:.4f}, {ci_upper:.4f}]")
+        else:
+            print(f"  {metric_name}: {mean:.4f}")
+    print("=" * 60 + "\n")
+
+
 def evaluate_command(args, config: Dict) -> int:
     """
     Execute evaluation command.
@@ -224,12 +450,10 @@ def evaluate_command(args, config: Dict) -> int:
         return 1
 
     # Load manifest
-    if manifest_path.suffix == ".csv":
-        df = pd.read_csv(manifest_path)
-    elif manifest_path.suffix == ".json":
-        df = pd.read_json(manifest_path)
-    else:
-        logger.error(f"Unsupported manifest format: {manifest_path.suffix}")
+    try:
+        df = _load_manifest(manifest_path)
+    except ValueError as e:
+        logger.error(str(e))
         return 1
 
     logger.info(f"Loaded {len(df)} entries from manifest")
@@ -238,16 +462,19 @@ def evaluate_command(args, config: Dict) -> int:
     col_config = config.get("columns", {})
     pred_col = col_config.get("prediction", "prediction")
     target_col = col_config.get("target", "target")
-    spacing_col = col_config.get("spacing", "spacing")
-    patient_col = col_config.get("patient_id", "patient_id")
-    strata_col = col_config.get("strata", "strata")
+    col_config = {
+        "prediction": pred_col,
+        "target": target_col,
+        "spacing": col_config.get("spacing", "spacing"),
+        "patient_id": col_config.get("patient_id", "patient_id"),
+        "strata": col_config.get("strata", "strata"),
+    }
 
     # Validate required columns
-    if pred_col not in df.columns:
-        logger.error(f"Missing required column: {pred_col}")
-        return 1
-    if target_col not in df.columns:
-        logger.error(f"Missing required column: {target_col}")
+    try:
+        _validate_manifest(df, [pred_col, target_col])
+    except ValueError as e:
+        logger.error(str(e))
         return 1
 
     # Create output directory
@@ -264,50 +491,21 @@ def evaluate_command(args, config: Dict) -> int:
     strata_data: List[Optional[str]] = []
 
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating", unit="case"):
-        try:
-            # Load prediction and target
-            pred, target = _load_prediction_target(
-                row,
-                pred_col=pred_col,
-                target_col=target_col,
-                spacing_col=spacing_col,
-                patient_col=patient_col,
-                strata_col=strata_col,
-            )
+        result, metrics, strata = _process_single_case(
+            row, idx, metric_fn, metric_config, col_config
+        )
+        all_results.append(result)
 
-            # Compute metrics
-            metrics = metric_fn(pred, target, metric_config)
-
-            # Store results
-            result = {
-                "index": idx,
-                "status": "success",
-                "patient_id": pred.patient_id,
-                "strata": pred.strata,
-                **metrics,
-            }
-            all_results.append(result)
-
+        if metrics is not None:
             # Accumulate for aggregation
             for k, v in metrics.items():
                 if k not in all_metrics:
                     all_metrics[k] = []
                 all_metrics[k].append(v)
-            strata_data.append(pred.strata)
-
-        except Exception as e:
-            logger.warning(f"Error processing row {idx}: {e}")
-            all_results.append({
-                "index": idx,
-                "status": "error",
-                "error": str(e),
-            })
+            strata_data.append(strata)
 
     # Save per-case results
-    results_df = pd.DataFrame(all_results)
-    results_path = output_dir / "results.csv"
-    results_df.to_csv(results_path, index=False)
-    logger.info(f"Per-case results saved to {results_path}")
+    _save_results(all_results, output_dir)
 
     # Aggregate metrics with CI
     logger.info("Aggregating metrics...")
@@ -341,59 +539,17 @@ def evaluate_command(args, config: Dict) -> int:
             seed=agg_config.get("seed", 42),
         )
 
-    # Build summary
-    summary = {
-        "task": task,
-        "n_samples": len(df),
-        "n_processed": len([r for r in all_results if r.get("status") == "success"]),
-        "n_errors": len([r for r in all_results if r.get("status") == "error"]),
-        "config": config,
-        "metrics": {
-            k: {
-                "mean": v[0] if isinstance(v, tuple) else v,
-                "ci_lower": v[1] if isinstance(v, tuple) else None,
-                "ci_upper": v[2] if isinstance(v, tuple) else None,
-            }
-            for k, v in aggregated.items()
-        },
-    }
+    # Build and save summary
+    summary = _compute_summary(
+        task, df, all_results, all_metrics, aggregated, stratified_results, config
+    )
 
-    if stratified_results:
-        summary["stratified_metrics"] = stratified_results
-
-    # Compute additional statistics
-    for metric_name, values in all_metrics.items():
-        values_arr = np.array(values)
-        summary["metrics"][metric_name]["std"] = float(np.std(values_arr))
-        summary["metrics"][metric_name]["median"] = float(np.median(values_arr))
-        summary["metrics"][metric_name]["iqr"] = [
-            float(np.percentile(values_arr, 25)),
-            float(np.percentile(values_arr, 75)),
-        ]
-
-    # Save summary
     summary_path = output_dir / "summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2, default=str)
     logger.info(f"Summary saved to {summary_path}")
 
     # Print summary to console
-    print("\n" + "=" * 60)
-    print(f"EVALUATION SUMMARY - {task.upper()}")
-    print("=" * 60)
-    print(f"Processed: {summary['n_processed']}/{summary['n_samples']} cases")
-    if summary['n_errors'] > 0:
-        print(f"Errors: {summary['n_errors']}")
-    print("-" * 60)
-    print("METRICS (mean [95% CI]):")
-    for metric_name, metric_data in summary["metrics"].items():
-        mean = metric_data["mean"]
-        ci_lower = metric_data.get("ci_lower")
-        ci_upper = metric_data.get("ci_upper")
-        if ci_lower is not None and ci_upper is not None:
-            print(f"  {metric_name}: {mean:.4f} [{ci_lower:.4f}, {ci_upper:.4f}]")
-        else:
-            print(f"  {metric_name}: {mean:.4f}")
-    print("=" * 60 + "\n")
+    _print_summary(summary)
 
     return 0
