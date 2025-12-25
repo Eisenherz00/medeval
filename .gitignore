@@ -51,14 +51,6 @@ site/
 .DS_Store
 Thumbs.db
 
-# Project specific
-*.nii.gz
-*.nii
-*.dcm
-*.dicom
-*.h5
-*.hdf5
-
 # Ignore repository overview
 OVERVIEW.md
 
