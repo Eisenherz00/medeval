@@ -24,20 +24,77 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 dependencies = [
-    "torch>=2.0.0",
     "numpy>=1.21.0",
     "scipy>=1.9.0",
     "scikit-learn>=1.0.0",
-    "SimpleITK>=2.3.0",
+]
+
+[project.optional-dependencies]
+# Runtime feature extras
+core = [
+    "numpy>=1.21.0",
+    "scipy>=1.9.0",
+    "scikit-learn>=1.0.0",
+]
+
+torch = [
+    "torch>=2.0.0",
+]
+
+# Medical image IO (NIfTI headers, SimpleITK adapters)
+io = [
     "nibabel>=5.0.0",
+    "SimpleITK>=2.3.0",
+]
+
+# Segmentation / registration workflows typically need IO
+seg = [
+    "nibabel>=5.0.0",
+    "SimpleITK>=2.3.0",
+]
+
+# CLI utilities (batch evaluation, manifests)
+cli = [
     "tqdm>=4.65.0",
     "pyyaml>=6.0",
     "pandas>=1.5.0",
 ]
 
-[project.optional-dependencies]
-dicom = ["pydicom>=2.3.0"]
+# Visualization helpers
+vis = [
+    "matplotlib>=3.8.0",
+]
+
+# Optional DICOM support
+# (Note: keep metadata stripping behavior in code; this is just the dependency.)
+dicom = [
+    "pydicom>=2.3.0",
+]
+
+# Convenience meta-extra for "everything"
+all = [
+    "torch>=2.0.0",
+    "nibabel>=5.0.0",
+    "SimpleITK>=2.3.0",
+    "tqdm>=4.65.0",
+    "pyyaml>=6.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.8.0",
+    "pydicom>=2.3.0",
+]
+
+# Dev / docs / QA
+# (Includes the 'all' runtime deps so demos/tests/docs run out-of-the-box.)
 dev = [
+    "torch>=2.0.0",
+    "nibabel>=5.0.0",
+    "SimpleITK>=2.3.0",
+    "tqdm>=4.65.0",
+    "pyyaml>=6.0",
+    "pandas>=1.5.0",
+    "matplotlib>=3.8.0",
+    "pydicom>=2.3.0",
+
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pytest-xdist>=3.3.0",
@@ -47,6 +104,9 @@ dev = [
     "pre-commit>=3.4.0",
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
+
+    "build>=1.0.0",
+    "twine>=6.0.0",
 ]
 
 [project.scripts]

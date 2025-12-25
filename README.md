@@ -3,6 +3,8 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![PyPI version](https://img.shields.io/pypi/v/medeval.svg)](https://pypi.org/project/medeval/)
+[![Downloads](https://img.shields.io/pypi/dm/medeval.svg)](https://pypi.org/project/medeval/)
 
 A PyTorch-native library for computing, aggregating, and visualizing evaluation metrics for medical imaging tasks with 2D/3D support, correct physical spacing handling, confidence intervals, and clean APIs (Python + CLI).
 
@@ -45,22 +47,39 @@ Surface-based metrics (Hausdorff, ASSD, Surface Dice) require physical `spacing`
 ## Installation
 
 ```bash
-# Basic installation
+# Install from PyPI (recommended)
 pip install medeval
 
 # With DICOM support
 pip install medeval[dicom]
 
+# Minimal install (metrics only, no IO / plotting)
+pip install medeval[minimal]
+
 # For development
 pip install -e ".[dev]"
 ```
 
-### Quick demo (no data needed)
-python demo_external_user/gen_data.py
-python demo_external_user/run_python_api.py
-bash demo_external_user/run_cli.sh
+## What MedEval Is (and Is Not)
+
+**MedEval is an evaluation library, not a training framework.**
+
+It assumes you already have model predictions and ground truth labels.
+MedEval’s responsibility is to:
+- Compute correct, spacing-aware medical metrics
+- Aggregate results across cases, patients, and strata
+- Produce reproducible CSV / JSON artifacts and plots
+
+MedEval deliberately does **not**:
+- Train models
+- Tune hyperparameters
+- Declare a “best model”
+
+This separation mirrors real clinical research and deployment workflows.
 
 ## End-to-End Demo (External User Perspective)
+
+This demo reflects how MedEval is intended to be used **after a model has already produced predictions**.
 
 The `demo_external_user/` directory provides a **realistic, end-to-end example** of how an external user would interact with MedEval using their own data.  
 It demonstrates **data preparation → evaluation → aggregation → visualization** using both the Python API and the CLI.
@@ -178,6 +197,9 @@ In this structure:
   - Study-specific conclusions
 
 This separation keeps MedEval reusable, transparent, and scientifically neutral.
+
+This design avoids hidden coupling between models and metrics and ensures that
+every comparison is explicit, auditable, and study-specific.
 
 ## Quick Start
 
@@ -427,7 +449,7 @@ If you use MedEval in your research, please cite:
 @software{medeval2024,
   title = {MedEval: Medical Imaging Evaluation Metrics},
   year = {2024},
-  url = {https://github.com/your-repo/medeval}
+  url = {https://github.com/Eisenherz00/medeval}
 }
 ```
 
