@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -56,6 +57,46 @@ def _load_prediction_target(
     pred_data = load_image(pred_path, as_torch=True)
     target_data = load_image(target_path, as_torch=True)
 
+    # Ensure batch and channel dimensions exist.
+    # File loaders often return (H,W) or (Z,Y,X) without batch/channel.
+    # Our metric APIs generally expect (B, ...) or (B, C, ...).
+    if isinstance(pred_data, torch.Tensor) and pred_data.dim() in (2, 3):
+        pred_data = pred_data.unsqueeze(0)
+    if isinstance(target_data, torch.Tensor) and target_data.dim() in (2, 3):
+        target_data = target_data.unsqueeze(0)
+
+    # Add an explicit channel dimension for common cases:
+    # - 2D: (B, H, W) -> (B, 1, H, W)
+    # - 3D: (B, Z, Y, X) -> (B, 1, Z, Y, X)
+    if isinstance(pred_data, torch.Tensor):
+        if pred_data.dim() == 3:
+            pred_data = pred_data.unsqueeze(1)
+        elif pred_data.dim() == 4:
+            # Heuristic: if axis-1 looks like channels (small), keep as-is.
+            # Otherwise treat as (B, Z, Y, X) and add a channel.
+            c_or_z = int(pred_data.shape[1])
+            if c_or_z not in (1, 2, 3, 4):
+                pred_data = pred_data.unsqueeze(1)
+
+    if isinstance(target_data, torch.Tensor):
+        if target_data.dim() == 3:
+            target_data = target_data.unsqueeze(1)
+        elif target_data.dim() == 4:
+            c_or_z = int(target_data.shape[1])
+            if c_or_z not in (1, 2, 3, 4):
+                target_data = target_data.unsqueeze(1)
+
+    # Debug: final tensor shapes after normalization
+    try:
+        if isinstance(pred_data, torch.Tensor) and isinstance(target_data, torch.Tensor):
+            logger.debug(
+                "Normalized shapes - pred: %s target: %s",
+                tuple(pred_data.shape),
+                tuple(target_data.shape),
+            )
+    except Exception:
+        pass
+
     # Get spacing
     spacing = None
     if spacing_col and spacing_col in row and pd.notna(row[spacing_col]):
@@ -71,10 +112,22 @@ def _load_prediction_target(
                 spacing = get_nifti_spacing(pred_path)
             except Exception:
                 pass
+    logger.debug("Resolved spacing for %s: %s", pred_path, spacing)
 
     # Get metadata
     patient_id = str(row[patient_col]) if patient_col and patient_col in row and pd.notna(row[patient_col]) else None
     strata = str(row[strata_col]) if strata_col and strata_col in row and pd.notna(row[strata_col]) else None
+
+    # Safety check: warn if prediction and target shapes differ after normalization
+    if isinstance(pred_data, torch.Tensor) and isinstance(target_data, torch.Tensor):
+        if pred_data.shape != target_data.shape:
+            logger.warning(
+                "Prediction/target shape mismatch after normalization: pred=%s target=%s (paths: %s vs %s)",
+                tuple(pred_data.shape),
+                tuple(target_data.shape),
+                pred_path,
+                target_path,
+            )
 
     pred = MedicalPrediction(
         data=pred_data,
@@ -100,24 +153,38 @@ def _compute_segmentation_metrics(
     """Compute segmentation metrics for a single case."""
     from medeval.metrics.segmentation import compute_segmentation_metrics
 
+    # Only compute surface metrics when spacing is present.
+    include_surface = bool(config.get("include_surface", True))
+    if pred.spacing is None:
+        include_surface = False
+
     results = compute_segmentation_metrics(
         pred=pred.to_tensor(),
         target=target.to_tensor(),
         spacing=pred.spacing,
         threshold=config.get("threshold", 0.5),
         ignore_index=config.get("ignore_index"),
-        include_surface=config.get("include_surface", True),
+        include_surface=include_surface,
         include_calibration=config.get("include_calibration", False),
         reduction="none",
     )
 
-    # Convert tensors to floats
-    output = {}
+    # Convert tensors to floats and sanitize non-finite values.
+    output: Dict[str, float] = {}
     for k, v in results.items():
         if isinstance(v, torch.Tensor):
-            output[k] = float(v.mean().item() if v.numel() > 1 else v.item())
+            val = float(v.mean().item() if v.numel() > 1 else v.item())
         else:
-            output[k] = float(v)
+            val = float(v)
+
+        output[k] = float("nan") if not math.isfinite(val) else val
+
+    # Record whether surface metrics were skipped for this case.
+    if bool(config.get("include_surface", True)) and pred.spacing is None:
+        output["_surface_metrics_skipped"] = 1.0
+    else:
+        output["_surface_metrics_skipped"] = 0.0
+
     return output
 
 
@@ -380,12 +447,22 @@ def _compute_summary(
 
     # Compute additional statistics
     for metric_name, values in all_metrics.items():
-        values_arr = np.array(values)
-        summary["metrics"][metric_name]["std"] = float(np.std(values_arr))
-        summary["metrics"][metric_name]["median"] = float(np.median(values_arr))
+        values_arr = np.asarray(values, dtype=float)
+        finite_mask = np.isfinite(values_arr)
+        summary["metrics"][metric_name]["n_finite"] = int(finite_mask.sum())
+
+        finite_vals = values_arr[finite_mask]
+        if finite_vals.size == 0:
+            summary["metrics"][metric_name]["std"] = None
+            summary["metrics"][metric_name]["median"] = None
+            summary["metrics"][metric_name]["iqr"] = None
+            continue
+
+        summary["metrics"][metric_name]["std"] = float(np.std(finite_vals))
+        summary["metrics"][metric_name]["median"] = float(np.median(finite_vals))
         summary["metrics"][metric_name]["iqr"] = [
-            float(np.percentile(values_arr, 25)),
-            float(np.percentile(values_arr, 75)),
+            float(np.percentile(finite_vals, 25)),
+            float(np.percentile(finite_vals, 75)),
         ]
 
     return summary
@@ -410,6 +487,8 @@ def _print_summary(summary: Dict[str, Any]) -> None:
     print("-" * 60)
     print("METRICS (mean [95% CI]):")
     for metric_name, metric_data in summary["metrics"].items():
+        if metric_name.startswith("_"):
+            continue
         mean = metric_data["mean"]
         ci_lower = metric_data.get("ci_lower")
         ci_upper = metric_data.get("ci_upper")
@@ -513,8 +592,17 @@ def evaluate_command(args, config: Dict) -> int:
     n_bootstrap = agg_config.get("n_bootstrap", 1000)
     confidence = agg_config.get("confidence", 0.95)
 
+    # Omit non-finite values (NaN/inf) from aggregation.
+    metrics_for_agg: Dict[str, np.ndarray] = {}
+    for k, vals in all_metrics.items():
+        arr = np.asarray(vals, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            continue
+        metrics_for_agg[k] = arr
+
     aggregated = aggregate_metrics(
-        {k: np.array(v) for k, v in all_metrics.items()},
+        metrics_for_agg,
         method="mean",
         compute_ci=True,
         ci_method="bootstrap",

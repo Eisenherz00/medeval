@@ -338,8 +338,16 @@ def jaccard_index(
             intersection = (pred_c * target_c).sum(dim=tuple(range(1, pred_c.dim())))
             union = (pred_c + target_c).clamp(0, 1).sum(dim=tuple(range(1, pred_c.dim())))
 
+            pred_c_sum = pred_c.sum(dim=tuple(range(1, pred_c.dim())))
+            target_c_sum = target_c.sum(dim=tuple(range(1, target_c.dim())))
+            both_empty = (pred_c_sum == 0) & (target_c_sum == 0)
+
             jaccard = torch.where(
-                union > 0, intersection / union, torch.tensor(0.0, device=pred.device)
+                both_empty,
+                torch.tensor(1.0, device=pred.device),
+                torch.where(
+                    union > 0, intersection / union, torch.tensor(0.0, device=pred.device)
+                ),
             )
             jaccard_scores.append(jaccard)
 
@@ -356,8 +364,16 @@ def jaccard_index(
         intersection = (pred * target).sum(dim=tuple(range(1, pred.dim())))
         union = (pred + target).clamp(0, 1).sum(dim=tuple(range(1, pred.dim())))
 
+        pred_sum = pred.sum(dim=tuple(range(1, pred.dim())))
+        target_sum = target.sum(dim=tuple(range(1, target.dim())))
+        both_empty = (pred_sum == 0) & (target_sum == 0)
+
         jaccard = torch.where(
-            union > 0, intersection / union, torch.tensor(0.0, device=pred.device)
+            both_empty,
+            torch.tensor(1.0, device=pred.device),
+            torch.where(
+                union > 0, intersection / union, torch.tensor(0.0, device=pred.device)
+            ),
         )
         jaccard_tensor = jaccard.unsqueeze(1) if reduction != "none" else jaccard
 
@@ -408,8 +424,16 @@ def precision_score(
     tp = (pred * target).sum(dim=tuple(range(1, pred.dim())))
     fp = (pred * (1 - target)).sum(dim=tuple(range(1, pred.dim())))
 
+    pred_sum = pred.sum(dim=tuple(range(1, pred.dim())))
+    target_sum = target.sum(dim=tuple(range(1, target.dim())))
+    both_empty = (pred_sum == 0) & (target_sum == 0)
+
     precision = torch.where(
-        (tp + fp) > 0, tp / (tp + fp), torch.tensor(0.0, device=pred.device)
+        both_empty,
+        torch.tensor(1.0, device=pred.device),
+        torch.where(
+            (tp + fp) > 0, tp / (tp + fp), torch.tensor(0.0, device=pred.device)
+        ),
     )
 
     return reduce_metrics(precision.unsqueeze(1), reduction=reduction)
@@ -459,8 +483,16 @@ def recall_score(
     tp = (pred * target).sum(dim=tuple(range(1, pred.dim())))
     fn = ((1 - pred) * target).sum(dim=tuple(range(1, pred.dim())))
 
+    pred_sum = pred.sum(dim=tuple(range(1, pred.dim())))
+    target_sum = target.sum(dim=tuple(range(1, target.dim())))
+    both_empty = (pred_sum == 0) & (target_sum == 0)
+
     recall = torch.where(
-        (tp + fn) > 0, tp / (tp + fn), torch.tensor(0.0, device=pred.device)
+        both_empty,
+        torch.tensor(1.0, device=pred.device),
+        torch.where(
+            (tp + fn) > 0, tp / (tp + fn), torch.tensor(0.0, device=pred.device)
+        ),
     )
 
     return reduce_metrics(recall.unsqueeze(1), reduction=reduction)
@@ -510,10 +542,15 @@ def volumetric_similarity(
     vol_pred = pred.sum(dim=tuple(range(1, pred.dim())))
     vol_target = target.sum(dim=tuple(range(1, target.dim())))
 
+    both_empty = (vol_pred == 0) & (vol_target == 0)
     vs = torch.where(
-        (vol_pred + vol_target) > 0,
-        1.0 - torch.abs(vol_pred - vol_target) / (vol_pred + vol_target),
-        torch.tensor(0.0, device=pred.device),
+        both_empty,
+        torch.tensor(1.0, device=pred.device),
+        torch.where(
+            (vol_pred + vol_target) > 0,
+            1.0 - torch.abs(vol_pred - vol_target) / (vol_pred + vol_target),
+            torch.tensor(0.0, device=pred.device),
+        ),
     )
 
     return reduce_metrics(vs.unsqueeze(1), reduction=reduction)
