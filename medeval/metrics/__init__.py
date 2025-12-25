@@ -21,6 +21,26 @@ from medeval.metrics.classification import (
     youden_threshold,
 )
 
+from medeval.metrics.detection import (
+    average_recall,
+    box_iou_2d,
+    box_iou_3d,
+    froc,
+    hungarian_matching,
+    instance_segmentation_matching,
+    mean_average_precision,
+)
+from medeval.metrics.registration import (
+    bending_energy,
+    compute_registration_metrics,
+    deformation_smoothness,
+    jacobian_determinant,
+    mind_ssd,
+    normalized_cross_correlation,
+    normalized_mutual_information,
+    target_registration_error,
+)
+
 from medeval.metrics.segmentation import (
     average_symmetric_surface_distance,
     brier_score,
@@ -70,8 +90,24 @@ __all__ = [
     "youden_threshold",
     "reliability_diagram",
     "decision_curve",
+    # Detection metrics
+    "box_iou_2d",
+    "box_iou_3d",
+    "mean_average_precision",
+    "froc",
+    "average_recall",
+    "hungarian_matching",
+    "instance_segmentation_matching",
+    # Registration metrics
+    "target_registration_error",
+    "normalized_mutual_information",
+    "normalized_cross_correlation",
+    "mind_ssd",
+    "jacobian_determinant",
+    "bending_energy",
+    "deformation_smoothness",
+    "compute_registration_metrics",
     # Utility functions
     "group_by_patient",
     "compute_classification_metrics",
 ]
-
