@@ -25,6 +25,7 @@ from medeval.metrics.detection import (
     average_recall,
     box_iou_2d,
     box_iou_3d,
+    compute_detection_metrics,
     froc,
     hungarian_matching,
     instance_segmentation_matching,
@@ -93,6 +94,7 @@ __all__ = [
     # Detection metrics
     "box_iou_2d",
     "box_iou_3d",
+    "compute_detection_metrics",
     "mean_average_precision",
     "froc",
     "average_recall",

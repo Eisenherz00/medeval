@@ -676,3 +676,186 @@ def instance_segmentation_matching(
         "fn": all_fn,
     }
 
+
+def compute_detection_metrics(
+    pred_boxes: ArrayLike,
+    target_boxes: ArrayLike,
+    iou_thresholds: Optional[List[float]] = None,
+    use_3d: bool = False,
+    include_froc: bool = False,
+) -> Dict[str, Union[float, np.ndarray]]:
+    """
+    Compute comprehensive detection metrics.
+
+    This is a high-level function that computes multiple detection metrics
+    from predicted and ground truth bounding boxes.
+
+    Parameters
+    ----------
+    pred_boxes : ArrayLike
+        Predicted boxes with format [x1, y1, (z1,) x2, y2, (z2,) score, class_id]
+        Shape: (N, 8) for 3D or (N, 6) for 2D
+    target_boxes : ArrayLike
+        Ground truth boxes with format [x1, y1, (z1,) x2, y2, (z2,) 1.0, class_id]
+        Shape: (M, 8) for 3D or (M, 6) for 2D
+    iou_thresholds : List[float], optional
+        IoU thresholds for mAP computation. If None, uses [0.5, 0.75]
+    use_3d : bool
+        If True, use 3D box IoU (boxes have 6 coordinates instead of 4)
+    include_froc : bool
+        If True, include FROC curve data in results
+
+    Returns
+    -------
+    Dict[str, Union[float, np.ndarray]]
+        Dictionary containing:
+        - iou_mean: Mean IoU between matched boxes
+        - mAP@{threshold}: Mean Average Precision at each threshold
+        - mAP@[.50:.95]: Mean AP across all thresholds (if multiple thresholds)
+        - precision: Overall precision
+        - recall: Overall recall
+        - froc_* (if include_froc): FROC curve data
+
+    Example
+    -------
+    >>> pred_boxes = torch.tensor([
+    ...     [10, 10, 5, 30, 30, 15, 0.9, 0],  # 3D box with score 0.9, class 0
+    ...     [50, 50, 10, 70, 70, 20, 0.8, 0],
+    ... ])
+    >>> gt_boxes = torch.tensor([
+    ...     [12, 12, 6, 32, 32, 16, 1.0, 0],
+    ... ])
+    >>> results = compute_detection_metrics(pred_boxes, gt_boxes, use_3d=True)
+    """
+    if iou_thresholds is None:
+        iou_thresholds = [0.5, 0.75]
+
+    pred_boxes = as_tensor(pred_boxes).float()
+    target_boxes = as_tensor(target_boxes).float()
+
+    results = {}
+
+    # Handle empty inputs
+    if len(pred_boxes) == 0 and len(target_boxes) == 0:
+        results["iou_mean"] = 1.0
+        for thresh in iou_thresholds:
+            results[f"mAP@{thresh:.2f}"] = 1.0
+        results["precision"] = 1.0
+        results["recall"] = 1.0
+        return results
+
+    if len(pred_boxes) == 0:
+        results["iou_mean"] = 0.0
+        for thresh in iou_thresholds:
+            results[f"mAP@{thresh:.2f}"] = 0.0
+        results["precision"] = 0.0
+        results["recall"] = 0.0
+        return results
+
+    if len(target_boxes) == 0:
+        results["iou_mean"] = 0.0
+        for thresh in iou_thresholds:
+            results[f"mAP@{thresh:.2f}"] = 0.0
+        results["precision"] = 0.0
+        results["recall"] = 0.0
+        return results
+
+    # Determine box format based on shape
+    box_dim = 6 if use_3d else 4
+    
+    # Extract box coordinates, scores, and class IDs
+    pred_coords = pred_boxes[:, :box_dim]
+    pred_scores = pred_boxes[:, box_dim]
+    pred_classes = pred_boxes[:, box_dim + 1].long()
+
+    target_coords = target_boxes[:, :box_dim]
+    target_classes = target_boxes[:, box_dim + 1].long()
+
+    # Compute IoU matrix
+    if use_3d:
+        iou_matrix = box_iou_3d(pred_coords, target_coords)
+    else:
+        iou_matrix = box_iou_2d(pred_coords, target_coords)
+
+    # Compute mean IoU of best matches
+    if iou_matrix.numel() > 0:
+        max_ious_per_pred = iou_matrix.max(dim=1).values
+        results["iou_mean"] = float(max_ious_per_pred.mean().item())
+    else:
+        results["iou_mean"] = 0.0
+
+    # Prepare data for mAP computation (wrap in lists as mAP expects per-image lists)
+    pred_boxes_list = [pred_coords]
+    pred_scores_list = [pred_scores]
+    pred_labels_list = [pred_classes]
+    target_boxes_list = [target_coords]
+    target_labels_list = [target_classes]
+
+    # Compute mAP at each threshold
+    map_results = mean_average_precision(
+        pred_boxes_list,
+        pred_scores_list,
+        pred_labels_list,
+        target_boxes_list,
+        target_labels_list,
+        iou_thresholds=np.array(iou_thresholds),
+        class_aware=True,
+        use_3d=use_3d,
+    )
+    results.update(map_results)
+
+    # Compute precision and recall at default IoU threshold (0.5)
+    default_thresh = 0.5
+    matched_targets = set()
+    tp = 0
+    fp = 0
+
+    # Sort predictions by score
+    sorted_indices = torch.argsort(pred_scores, descending=True)
+    
+    for idx in sorted_indices:
+        pred_class = pred_classes[idx].item()
+        
+        # Find best matching target of same class
+        best_iou = 0.0
+        best_target_idx = -1
+        
+        for t_idx in range(len(target_boxes)):
+            if t_idx in matched_targets:
+                continue
+            if target_classes[t_idx].item() != pred_class:
+                continue
+            
+            iou = iou_matrix[idx, t_idx].item()
+            if iou > best_iou:
+                best_iou = iou
+                best_target_idx = t_idx
+        
+        if best_iou >= default_thresh and best_target_idx >= 0:
+            tp += 1
+            matched_targets.add(best_target_idx)
+        else:
+            fp += 1
+
+    fn = len(target_boxes) - len(matched_targets)
+    
+    results["precision"] = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+    results["recall"] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+
+    # Include FROC if requested
+    if include_froc:
+        froc_results = froc(
+            pred_boxes_list,
+            pred_scores_list,
+            pred_labels_list,
+            target_boxes_list,
+            target_labels_list,
+            iou_threshold=default_thresh,
+            use_3d=use_3d,
+        )
+        results["froc_sensitivity"] = froc_results["sensitivity"]
+        results["froc_avg_fps"] = froc_results["avg_fps_per_image"]
+        results["froc_thresholds"] = froc_results["thresholds"]
+
+    return results
+

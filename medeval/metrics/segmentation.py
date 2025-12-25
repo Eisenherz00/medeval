@@ -166,12 +166,32 @@ def _compute_hausdorff_distance(
         return float(max(np.max(min_dists_pred), np.max(min_dists_target)))
 
 
+def _is_integer_label_map(tensor: Tensor) -> bool:
+    """Check if tensor contains integer class labels (not one-hot or probabilistic)."""
+    if tensor.dtype.is_floating_point:
+        # Check if values are integer-like (0, 1, 2, ...) not probabilities
+        unique_vals = torch.unique(tensor)
+        if len(unique_vals) <= 20:  # Reasonable number of classes
+            return torch.allclose(unique_vals, unique_vals.round())
+    else:
+        return True
+    return False
+
+
+def _get_num_classes_from_labels(pred: Tensor, target: Tensor) -> int:
+    """Infer number of classes from integer label tensors."""
+    pred_max = pred.max().item()
+    target_max = target.max().item()
+    return int(max(pred_max, target_max)) + 1
+
+
 def dice_score(
     pred: ArrayLike,
     target: ArrayLike,
     threshold: float = 0.5,
     ignore_index: Optional[int] = None,
     reduction: ReductionType = "mean-case",
+    num_classes: Optional[int] = None,
 ) -> Tensor:
     """
     Compute Dice coefficient (F1 score) for binary or multi-class segmentation.
@@ -181,15 +201,21 @@ def dice_score(
     Parameters
     ----------
     pred : ArrayLike
-        Predictions, shape (B, C, ...) or (B, ...) for binary
+        Predictions, can be:
+        - Binary mask: (B, ...) or (B, 1, ...) with values 0/1
+        - Probabilistic: (B, ...) or (B, 1, ...) with values in [0, 1]
+        - One-hot encoded: (B, C, ...) with C > 1
+        - Integer labels: (B, ...) or (B, 1, ...) with integer class indices
     target : ArrayLike
-        Ground truth, same shape as pred
+        Ground truth, same format options as pred
     threshold : float
-        Threshold for binary predictions (default: 0.5)
+        Threshold for binary/probabilistic predictions (default: 0.5)
     ignore_index : int, optional
         Label index to ignore
     reduction : ReductionType
         Reduction strategy: "none", "mean-case", "mean-class", "global"
+    num_classes : int, optional
+        Number of classes for multi-class integer labels. If None, inferred from data.
 
     Returns
     -------
@@ -200,21 +226,36 @@ def dice_score(
     target = as_tensor(target)
     pred, target = _ensure_batch(pred, target)
 
-    # Handle ignore_index
-    if ignore_index is not None:
-        mask = target != ignore_index
-        pred = pred * mask.float()
-        target = target * mask.float()
-
-    # Check if multi-class (has channel dimension with multiple classes)
-    is_multi_class = (
+    # Detect input type
+    # Case 1: One-hot encoded (B, C, ...) with C > 1
+    is_onehot = (
         pred.dim() >= 3
         and target.dim() >= 3
         and pred.shape[1] > 1
         and (target.shape[1] > 1 if target.dim() > 2 else False)
     )
 
-    if is_multi_class:
+    # Case 2: Integer label maps (B, 1, ...) or (B, ...) with multiple unique values
+    is_integer_labels = False
+    if not is_onehot:
+        # Squeeze channel dim if size 1
+        pred_check = pred.squeeze(1) if pred.dim() >= 3 and pred.shape[1] == 1 else pred
+        target_check = target.squeeze(1) if target.dim() >= 3 and target.shape[1] == 1 else target
+        
+        # Check if these are integer labels (more than 2 unique values)
+        pred_unique = len(torch.unique(pred_check))
+        target_unique = len(torch.unique(target_check))
+        
+        if pred_unique > 2 or target_unique > 2:
+            is_integer_labels = True
+
+    # Handle ignore_index
+    if ignore_index is not None:
+        mask = target != ignore_index
+        pred = pred * mask.float()
+        target = target * mask.float()
+
+    if is_onehot:
         # Multi-class case: assume one-hot or logits format (B, C, ...)
         # Convert to class indices
         if pred.dtype.is_floating_point:
@@ -228,9 +269,11 @@ def dice_score(
             target_classes = target.squeeze(1) if target.shape[1] == 1 else target
 
         # Compute per-class Dice
-        num_classes = pred.shape[1]
+        n_classes = pred.shape[1]
         dice_scores = []
-        for c in range(num_classes):
+        for c in range(n_classes):
+            if ignore_index is not None and c == ignore_index:
+                continue
             pred_c = (pred_classes == c).float()
             target_c = (target_classes == c).float()
 
@@ -253,6 +296,54 @@ def dice_score(
             dice_scores.append(dice)
 
         dice_tensor = torch.stack(dice_scores, dim=1)  # (B, C)
+
+    elif is_integer_labels:
+        # Integer label maps: compute per-class Dice
+        # Squeeze channel dimension if present
+        if pred.dim() >= 3 and pred.shape[1] == 1:
+            pred = pred.squeeze(1)
+        if target.dim() >= 3 and target.shape[1] == 1:
+            target = target.squeeze(1)
+
+        # Ensure long dtype for indexing
+        pred_int = pred.long()
+        target_int = target.long()
+
+        # Get number of classes
+        if num_classes is None:
+            num_classes = _get_num_classes_from_labels(pred_int, target_int)
+
+        # Compute per-class Dice
+        dice_scores = []
+        for c in range(num_classes):
+            if ignore_index is not None and c == ignore_index:
+                continue
+            pred_c = (pred_int == c).float()
+            target_c = (target_int == c).float()
+
+            intersection = (pred_c * target_c).sum(dim=tuple(range(1, pred_c.dim())))
+            union = pred_c.sum(dim=tuple(range(1, pred_c.dim()))) + target_c.sum(
+                dim=tuple(range(1, target_c.dim()))
+            )
+
+            pred_c_sum = pred_c.sum(dim=tuple(range(1, pred_c.dim())))
+            target_c_sum = target_c.sum(dim=tuple(range(1, target_c.dim())))
+            both_empty = (pred_c_sum == 0) & (target_c_sum == 0)
+            dice = torch.where(
+                both_empty,
+                torch.tensor(1.0, device=pred.device),
+                torch.where(
+                    union > 0, 2.0 * intersection / union, torch.tensor(0.0, device=pred.device)
+                ),
+            )
+            dice_scores.append(dice)
+
+        if dice_scores:
+            dice_tensor = torch.stack(dice_scores, dim=1)  # (B, C)
+        else:
+            # No valid classes (all ignored)
+            dice_tensor = torch.tensor([[1.0]], device=pred.device)
+
     else:
         # Binary case: ensure same shape
         if pred.dim() > target.dim():
@@ -290,6 +381,7 @@ def jaccard_index(
     threshold: float = 0.5,
     ignore_index: Optional[int] = None,
     reduction: ReductionType = "mean-case",
+    num_classes: Optional[int] = None,
 ) -> Tensor:
     """
     Compute Jaccard index (IoU) for segmentation.
@@ -299,7 +391,7 @@ def jaccard_index(
     Parameters
     ----------
     pred : ArrayLike
-        Predictions
+        Predictions (binary, probabilistic, one-hot, or integer labels)
     target : ArrayLike
         Ground truth
     threshold : float
@@ -308,6 +400,8 @@ def jaccard_index(
         Label index to ignore
     reduction : ReductionType
         Reduction strategy
+    num_classes : int, optional
+        Number of classes for multi-class integer labels
 
     Returns
     -------
@@ -318,29 +412,40 @@ def jaccard_index(
     target = as_tensor(target)
     pred, target = _ensure_batch(pred, target)
 
-    if ignore_index is not None:
-        mask = target != ignore_index
-        pred = pred * mask.float()
-        target = target * mask.float()
-
-    # Check if multi-class
-    is_multi_class = (
+    # Detect input type
+    is_onehot = (
         pred.dim() >= 3
         and target.dim() >= 3
         and pred.shape[1] > 1
         and (target.shape[1] > 1 if target.dim() > 2 else False)
     )
 
-    if is_multi_class:
+    is_integer_labels = False
+    if not is_onehot:
+        pred_check = pred.squeeze(1) if pred.dim() >= 3 and pred.shape[1] == 1 else pred
+        target_check = target.squeeze(1) if target.dim() >= 3 and target.shape[1] == 1 else target
+        pred_unique = len(torch.unique(pred_check))
+        target_unique = len(torch.unique(target_check))
+        if pred_unique > 2 or target_unique > 2:
+            is_integer_labels = True
+
+    if ignore_index is not None:
+        mask = target != ignore_index
+        pred = pred * mask.float()
+        target = target * mask.float()
+
+    if is_onehot:
         if pred.dtype.is_floating_point:
             pred_classes = pred.argmax(dim=1)
         else:
             pred_classes = pred.argmax(dim=1)
         target_classes = target.argmax(dim=1) if target.dim() > 2 and target.shape[1] > 1 else target.squeeze(1) if target.dim() > 2 else target
 
-        num_classes = pred.shape[1]
+        n_classes = pred.shape[1]
         jaccard_scores = []
-        for c in range(num_classes):
+        for c in range(n_classes):
+            if ignore_index is not None and c == ignore_index:
+                continue
             pred_c = (pred_classes == c).float()
             target_c = (target_classes == c).float()
 
@@ -361,8 +466,50 @@ def jaccard_index(
             jaccard_scores.append(jaccard)
 
         jaccard_tensor = torch.stack(jaccard_scores, dim=1)
+
+    elif is_integer_labels:
+        # Integer label maps
+        if pred.dim() >= 3 and pred.shape[1] == 1:
+            pred = pred.squeeze(1)
+        if target.dim() >= 3 and target.shape[1] == 1:
+            target = target.squeeze(1)
+
+        pred_int = pred.long()
+        target_int = target.long()
+
+        if num_classes is None:
+            num_classes = _get_num_classes_from_labels(pred_int, target_int)
+
+        jaccard_scores = []
+        for c in range(num_classes):
+            if ignore_index is not None and c == ignore_index:
+                continue
+            pred_c = (pred_int == c).float()
+            target_c = (target_int == c).float()
+
+            intersection = (pred_c * target_c).sum(dim=tuple(range(1, pred_c.dim())))
+            union = (pred_c + target_c).clamp(0, 1).sum(dim=tuple(range(1, pred_c.dim())))
+
+            pred_c_sum = pred_c.sum(dim=tuple(range(1, pred_c.dim())))
+            target_c_sum = target_c.sum(dim=tuple(range(1, target_c.dim())))
+            both_empty = (pred_c_sum == 0) & (target_c_sum == 0)
+
+            jaccard = torch.where(
+                both_empty,
+                torch.tensor(1.0, device=pred.device),
+                torch.where(
+                    union > 0, intersection / union, torch.tensor(0.0, device=pred.device)
+                ),
+            )
+            jaccard_scores.append(jaccard)
+
+        if jaccard_scores:
+            jaccard_tensor = torch.stack(jaccard_scores, dim=1)
+        else:
+            jaccard_tensor = torch.tensor([[1.0]], device=pred.device)
+
     else:
-        # Ensure same shape
+        # Binary case
         if pred.dim() > target.dim():
             target = target.unsqueeze(1)
         elif target.dim() > pred.dim():

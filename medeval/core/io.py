@@ -324,6 +324,105 @@ def get_sitk_spacing(path: str) -> Tuple[float, ...]:
     return tuple(sitk_image.GetSpacing())
 
 
+def get_spacing_from_header(path: str) -> Tuple[float, ...]:
+    """
+    Extract spacing from image file header, auto-detecting format.
+
+    This is a unified function that automatically detects the file format
+    and extracts spacing information from the appropriate header.
+
+    Parameters
+    ----------
+    path : str
+        Path to image file. Supported formats:
+        - NIfTI (.nii, .nii.gz)
+        - SimpleITK-readable formats (.mha, .mhd, .nrrd)
+        - DICOM (.dcm)
+
+    Returns
+    -------
+    Tuple[float, ...]
+        Physical spacing (dx, dy, dz) or (dx, dy) depending on dimensionality.
+        For 3D images, returns (dz, dy, dx) in the order matching array indexing.
+
+    Raises
+    ------
+    ValueError
+        If the file format is not supported
+    ImportError
+        If required library is not installed
+
+    Example
+    -------
+    >>> spacing = get_spacing_from_header("brain.nii.gz")
+    >>> print(spacing)  # e.g., (1.0, 1.0, 3.0) for 1mm in-plane, 3mm slice thickness
+    """
+    path_lower = path.lower()
+
+    # NIfTI files
+    if path_lower.endswith((".nii", ".nii.gz")):
+        return get_nifti_spacing(path)
+
+    # SimpleITK-readable formats
+    if HAS_SITK and path_lower.endswith((".mha", ".mhd", ".nrrd")):
+        return get_sitk_spacing(path)
+
+    # DICOM files
+    if path_lower.endswith(".dcm") or path_lower.endswith(".dicom"):
+        return get_dicom_spacing(path)
+
+    # Try SimpleITK as fallback for other formats
+    if HAS_SITK:
+        try:
+            return get_sitk_spacing(path)
+        except Exception:
+            pass
+
+    raise ValueError(
+        f"Unsupported file format or unable to read spacing from: {path}. "
+        f"Supported formats: .nii, .nii.gz, .mha, .mhd, .nrrd, .dcm"
+    )
+
+
+def get_dicom_spacing(path: str) -> Tuple[float, ...]:
+    """
+    Extract spacing from DICOM file.
+
+    Parameters
+    ----------
+    path : str
+        Path to DICOM file
+
+    Returns
+    -------
+    Tuple[float, ...]
+        Spacing (slice_thickness, pixel_spacing_y, pixel_spacing_x)
+        or (pixel_spacing_y, pixel_spacing_x) if no slice thickness
+    """
+    if not HAS_PYDICOM:
+        raise ImportError("pydicom is required for DICOM support. Install with: pip install pydicom")
+
+    ds = pydicom.dcmread(path, stop_before_pixels=True)
+
+    # Get pixel spacing (row spacing, column spacing)
+    pixel_spacing = getattr(ds, "PixelSpacing", [1.0, 1.0])
+    if hasattr(pixel_spacing, "__iter__"):
+        pixel_spacing = [float(x) for x in pixel_spacing]
+    else:
+        pixel_spacing = [float(pixel_spacing), float(pixel_spacing)]
+
+    # Get slice thickness or spacing between slices
+    slice_thickness = getattr(ds, "SliceThickness", None)
+    spacing_between_slices = getattr(ds, "SpacingBetweenSlices", None)
+
+    z_spacing = slice_thickness or spacing_between_slices
+
+    if z_spacing is not None:
+        return (float(z_spacing), pixel_spacing[0], pixel_spacing[1])
+    else:
+        return (pixel_spacing[0], pixel_spacing[1])
+
+
 def load_dicom(
     path: str,
     strip_metadata: bool = True,

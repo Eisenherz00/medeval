@@ -607,10 +607,15 @@ def compute_registration_metrics(
     deformation_field: Optional[ArrayLike] = None,
     spacing: Optional[Tuple[float, ...]] = None,
     include_image_similarity: bool = True,
-    include_deformation_quality: bool = False,
+    include_deformation_quality: Optional[bool] = None,
 ) -> Dict[str, Union[float, Dict]]:
     """
     Compute comprehensive registration metrics.
+
+    This function computes various metrics to evaluate image registration quality:
+    - Landmark-based: Target Registration Error (TRE)
+    - Image similarity: Normalized Mutual Information (NMI), Normalized Cross-Correlation (NCC)
+    - Deformation quality: Jacobian determinant, bending energy, smoothness
 
     Parameters
     ----------
@@ -619,24 +624,57 @@ def compute_registration_metrics(
     target_image : ArrayLike, optional
         Target/reference image
     pred_landmarks : ArrayLike, optional
-        Landmark positions after registration
+        Landmark positions after registration, shape (N, D) where D is spatial dimension
     target_landmarks : ArrayLike, optional
-        Ground truth landmark positions
+        Ground truth landmark positions, shape (N, D)
     deformation_field : ArrayLike, optional
-        Deformation field
+        Deformation field, shape (D, ...) where D is the number of spatial dimensions
     spacing : Tuple[float, ...], optional
-        Physical spacing
+        Physical spacing for distance/TRE computation
     include_image_similarity : bool
-        If True, compute image similarity metrics
-    include_deformation_quality : bool
-        If True, compute deformation field quality metrics
+        If True, compute image similarity metrics (NMI, NCC) when images are provided
+    include_deformation_quality : bool, optional
+        If True, compute deformation field quality metrics (Jacobian, bending energy).
+        If None (default), automatically enabled when deformation_field is provided.
 
     Returns
     -------
     Dict[str, Union[float, Dict]]
-        Dictionary of registration metrics
+        Dictionary of registration metrics:
+        - tre: dict with mean, median, 95th_percentile, per_landmark (if landmarks provided)
+        - nmi: float, Normalized Mutual Information (if images provided)
+        - ncc: float, Normalized Cross-Correlation (if images provided)
+        - jacobian: dict with mean, median, std, min, max, folding_percentage (if deformation provided)
+        - bending_energy: float (if deformation provided)
+        - smoothness: dict with average_gradient_magnitude, bending_energy (if deformation provided)
+
+    Example
+    -------
+    >>> # Landmark-based evaluation
+    >>> pred_landmarks = torch.tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+    >>> gt_landmarks = torch.tensor([[10.5, 20.2, 30.1], [40.8, 50.5, 60.3]])
+    >>> results = compute_registration_metrics(
+    ...     pred_landmarks=pred_landmarks,
+    ...     target_landmarks=gt_landmarks,
+    ...     spacing=(1.0, 1.0, 1.0)
+    ... )
+    >>> print(f"Mean TRE: {results['tre']['mean']:.2f} mm")
+    
+    >>> # With deformation field analysis
+    >>> deformation = torch.randn(3, 16, 32, 32) * 0.1
+    >>> results = compute_registration_metrics(
+    ...     pred_landmarks=pred_landmarks,
+    ...     target_landmarks=gt_landmarks,
+    ...     deformation_field=deformation,
+    ...     spacing=(2.0, 1.0, 1.0)
+    ... )
+    >>> print(f"Folding: {results['jacobian']['folding_percentage']:.2f}%")
     """
     results = {}
+
+    # Auto-enable deformation quality if deformation_field is provided
+    if include_deformation_quality is None:
+        include_deformation_quality = deformation_field is not None
 
     # Landmark-based metrics
     if pred_landmarks is not None and target_landmarks is not None:
@@ -652,10 +690,29 @@ def compute_registration_metrics(
 
     # Deformation field quality
     if include_deformation_quality and deformation_field is not None:
-        jacobian_results = jacobian_determinant(deformation_field, spacing=spacing)
-        results["jacobian"] = jacobian_results
-        results["bending_energy"] = bending_energy(deformation_field, spacing=spacing)
-        smoothness_results = deformation_smoothness(deformation_field, spacing=spacing)
+        # Get spacing for deformation field (use spacing or default to 1.0)
+        def_field = as_tensor(deformation_field)
+        if def_field.dim() == 4:
+            # (B, D, H, W) - remove batch if present, or (D, Z, H, W)
+            if def_field.shape[0] in (1, 2, 3):
+                # Likely (D, Z, H, W) where D is displacement components
+                pass
+            else:
+                # Likely (B, D, H, W) - take first batch
+                def_field = def_field[0]
+        elif def_field.dim() == 5:
+            # (B, D, Z, H, W) - take first batch
+            def_field = def_field[0]
+        
+        # Compute Jacobian determinant
+        jacobian_results = jacobian_determinant(def_field, spacing=spacing)
+        # Remove the full jacobian array from results (too large)
+        results["jacobian"] = {
+            k: v for k, v in jacobian_results.items() if k != "jacobians"
+        }
+        
+        results["bending_energy"] = bending_energy(def_field, spacing=spacing)
+        smoothness_results = deformation_smoothness(def_field, spacing=spacing)
         results["smoothness"] = smoothness_results
 
     return results

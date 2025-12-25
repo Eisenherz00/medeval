@@ -26,8 +26,10 @@ from medeval.core.interop import (
     torchmetrics_to_medeval,
 )
 from medeval.core.io import (
+    get_dicom_spacing,
     get_nifti_spacing,
     get_sitk_spacing,
+    get_spacing_from_header,
     load_dicom,
     load_image,
     load_nifti,
@@ -91,6 +93,8 @@ __all__ = [
     "load_sitk",
     "save_sitk",
     "get_sitk_spacing",
+    "get_dicom_spacing",
+    "get_spacing_from_header",
     "load_dicom",
     # Aggregate
     "AggregationMethod",
