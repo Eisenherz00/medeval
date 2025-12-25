@@ -13,7 +13,8 @@ Example
 >>> dice = dice_score(pred, target)
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _version
+__version__ = _version("medeval")
 
 # Convenience imports
 from medeval.core import (
@@ -34,4 +35,3 @@ __all__ = [
     "bootstrap_ci",
     "MedicalPrediction",
 ]
-
