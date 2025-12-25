@@ -11,6 +11,58 @@ from medeval.core.typing import ArrayLike, Tensor, as_tensor
 AggregationMethod = Literal["mean", "median", "std", "sem"]
 
 
+def _compute_statistic(values: np.ndarray, method: AggregationMethod) -> float:
+    """
+    Compute statistic from values array.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Input values array
+    method : AggregationMethod
+        Statistic to compute: "mean", "median", "std", "sem"
+
+    Returns
+    -------
+    float
+        Computed statistic
+    """
+    if method == "mean":
+        return float(np.mean(values))
+    elif method == "median":
+        return float(np.median(values))
+    elif method == "std":
+        return float(np.std(values, ddof=1))
+    elif method == "sem":
+        return float(np.std(values, ddof=1) / np.sqrt(len(values)))
+    else:
+        raise ValueError(f"Unknown aggregation method: {method}")
+
+
+def _flatten_to_1d(values: ArrayLike) -> np.ndarray:
+    """
+    Flatten multi-dimensional array to 1D for aggregation.
+
+    Parameters
+    ----------
+    values : ArrayLike
+        Input values (tensor or array)
+
+    Returns
+    -------
+    np.ndarray
+        Flattened 1D array
+    """
+    values_tensor = as_tensor(values)
+    if values_tensor.dim() > 1:
+        # Flatten if truly 1D after flattening, else take mean over non-sample dims
+        if values_tensor.numel() == values_tensor.shape[0]:
+            values_tensor = values_tensor.flatten()
+        else:
+            values_tensor = values_tensor.mean(dim=tuple(range(1, values_tensor.dim())))
+    return values_tensor.cpu().numpy()
+
+
 def bootstrap_ci(
     values: ArrayLike,
     confidence: float = 0.95,
@@ -39,12 +91,7 @@ def bootstrap_ci(
     Tuple[float, float, float]
         (statistic, lower_bound, upper_bound)
     """
-    values = as_tensor(values)
-    if values.dim() > 1:
-        # Flatten or take mean over non-sample dimensions
-        values = values.flatten() if values.numel() == values.shape[0] else values.mean(dim=tuple(range(1, values.dim())))
-
-    values_np = values.cpu().numpy()
+    values_np = _flatten_to_1d(values)
     n = len(values_np)
 
     if seed is not None:
@@ -55,18 +102,7 @@ def bootstrap_ci(
     for _ in range(n_bootstrap):
         indices = np.random.choice(n, size=n, replace=True)
         sample = values_np[indices]
-
-        if method == "mean":
-            stat = np.mean(sample)
-        elif method == "median":
-            stat = np.median(sample)
-        elif method == "std":
-            stat = np.std(sample, ddof=1)
-        elif method == "sem":
-            stat = np.std(sample, ddof=1) / np.sqrt(len(sample))
-        else:
-            raise ValueError(f"Unknown aggregation method: {method}")
-
+        stat = _compute_statistic(sample, method)
         bootstrap_stats.append(stat)
 
     bootstrap_stats = np.array(bootstrap_stats)
@@ -80,14 +116,7 @@ def bootstrap_ci(
     upper_bound = np.percentile(bootstrap_stats, upper_percentile)
 
     # Compute actual statistic
-    if method == "mean":
-        statistic = np.mean(values_np)
-    elif method == "median":
-        statistic = np.median(values_np)
-    elif method == "std":
-        statistic = np.std(values_np, ddof=1)
-    elif method == "sem":
-        statistic = np.std(values_np, ddof=1) / np.sqrt(n)
+    statistic = _compute_statistic(values_np, method)
 
     return float(statistic), float(lower_bound), float(upper_bound)
 
@@ -114,39 +143,17 @@ def jackknife_ci(
     Tuple[float, float, float]
         (statistic, lower_bound, upper_bound)
     """
-    values = as_tensor(values)
-    if values.dim() > 1:
-        values = values.flatten() if values.numel() == values.shape[0] else values.mean(dim=tuple(range(1, values.dim())))
-
-    values_np = values.cpu().numpy()
+    values_np = _flatten_to_1d(values)
     n = len(values_np)
 
     # Compute full statistic
-    if method == "mean":
-        full_stat = np.mean(values_np)
-    elif method == "median":
-        full_stat = np.median(values_np)
-    elif method == "std":
-        full_stat = np.std(values_np, ddof=1)
-    elif method == "sem":
-        full_stat = np.std(values_np, ddof=1) / np.sqrt(n)
-    else:
-        raise ValueError(f"Unknown aggregation method: {method}")
+    full_stat = _compute_statistic(values_np, method)
 
     # Jackknife: leave-one-out estimates
     jackknife_stats = []
     for i in range(n):
         jackknife_sample = np.concatenate([values_np[:i], values_np[i + 1 :]])
-
-        if method == "mean":
-            stat = np.mean(jackknife_sample)
-        elif method == "median":
-            stat = np.median(jackknife_sample)
-        elif method == "std":
-            stat = np.std(jackknife_sample, ddof=1)
-        elif method == "sem":
-            stat = np.std(jackknife_sample, ddof=1) / np.sqrt(len(jackknife_sample))
-
+        stat = _compute_statistic(jackknife_sample, method)
         jackknife_stats.append(stat)
 
     jackknife_stats = np.array(jackknife_stats)
@@ -204,22 +211,8 @@ def aggregate_metrics(
     results = {}
 
     for name, values in metrics.items():
-        values_tensor = as_tensor(values)
-        if values_tensor.dim() > 1:
-            values_tensor = values_tensor.flatten() if values_tensor.numel() == values_tensor.shape[0] else values_tensor.mean(dim=tuple(range(1, values_tensor.dim())))
-
-        values_np = values_tensor.cpu().numpy()
-
-        if method == "mean":
-            stat = float(np.mean(values_np))
-        elif method == "median":
-            stat = float(np.median(values_np))
-        elif method == "std":
-            stat = float(np.std(values_np, ddof=1))
-        elif method == "sem":
-            stat = float(np.std(values_np, ddof=1) / np.sqrt(len(values_np)))
-        else:
-            raise ValueError(f"Unknown aggregation method: {method}")
+        values_np = _flatten_to_1d(values)
+        stat = _compute_statistic(values_np, method)
 
         if compute_ci:
             if ci_method == "bootstrap":
@@ -279,31 +272,19 @@ def stratified_aggregate(
     results = {}
 
     for metric_name, values in metrics.items():
-        values_tensor = as_tensor(values)
-        if values_tensor.dim() > 1:
-            values_tensor = values_tensor.flatten() if values_tensor.numel() == values_tensor.shape[0] else values_tensor.mean(dim=tuple(range(1, values_tensor.dim())))
-
-        values_np = values_tensor.cpu().numpy()
+        values_np = _flatten_to_1d(values)
 
         if len(values_np) != len(strata_np):
-            raise ValueError(f"Metric {metric_name} length {len(values_np)} != strata length {len(strata_np)}")
+            raise ValueError(
+                f"Metric {metric_name} length {len(values_np)} != strata length {len(strata_np)}"
+            )
 
         results[metric_name] = {}
 
         for stratum in unique_strata:
             mask = strata_np == stratum
             stratum_values = values_np[mask]
-
-            if method == "mean":
-                stat = float(np.mean(stratum_values))
-            elif method == "median":
-                stat = float(np.median(stratum_values))
-            elif method == "std":
-                stat = float(np.std(stratum_values, ddof=1))
-            elif method == "sem":
-                stat = float(np.std(stratum_values, ddof=1) / np.sqrt(len(stratum_values)))
-            else:
-                raise ValueError(f"Unknown aggregation method: {method}")
+            stat = _compute_statistic(stratum_values, method)
 
             if compute_ci:
                 if ci_method == "bootstrap":
