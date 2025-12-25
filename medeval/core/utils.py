@@ -40,11 +40,60 @@ def apply_spacing(
     if len(spacing) != spatial_dims:
         raise ValueError(
             f"Spacing dimension {len(spacing)} does not match "
-            f"coordinate dimension {spatial_dims}"
+            f"coordinate dimension {spatial_dims} for coords shape {coords.shape}. "
+            f"Expected spacing with {spatial_dims} values, got {len(spacing)}."
         )
 
     # Apply spacing: physical = voxel * spacing
     return coords * spacing_tensor
+
+
+def _get_spatial_dims_and_scale(
+    image: Tensor,
+    spacing: Tuple[float, ...],
+    target_spacing: Tuple[float, ...],
+) -> Tuple[int, Tuple[float, ...], bool]:
+    """
+    Determine spatial dimensions, scale factors, and if channel dim needs squeeze.
+
+    Parameters
+    ----------
+    image : Tensor
+        Input image tensor
+    spacing : Tuple[float, ...]
+        Current spacing
+    target_spacing : Tuple[float, ...]
+        Target spacing
+
+    Returns
+    -------
+    Tuple[int, Tuple[float, ...], bool]
+        (spatial_dims, scale_factors, needs_squeeze)
+    """
+    ndim = len(spacing)
+    image_dim = image.dim()
+    scale_factors = [s / ts for s, ts in zip(spacing, target_spacing)]
+
+    if image_dim == 4:  # (B, C, Y, X) or (B, Z, Y, X)
+        if ndim == 2:
+            # 2D: (B, C, Y, X)
+            return 2, tuple(scale_factors[:2]), False
+        elif ndim == 3:
+            # 3D without channel: (B, Z, Y, X)
+            return 3, tuple(scale_factors), True
+        else:
+            raise ValueError(
+                f"Image dims {image_dim} incompatible with spacing dims {ndim}"
+            )
+    elif image_dim == 5:  # (B, C, Z, Y, X)
+        if ndim == 3:
+            return 3, tuple(scale_factors), False
+        else:
+            raise ValueError(
+                f"Image dims {image_dim} incompatible with spacing dims {ndim}"
+            )
+    else:
+        raise ValueError(f"Unsupported image dimensions: {image_dim}")
 
 
 def sample_with_spacing(
@@ -78,54 +127,38 @@ def sample_with_spacing(
         # Use isotropic spacing based on minimum
         target_spacing = tuple([min(spacing)] * len(spacing))
 
-    # Compute scale factors
-    scale_factors = [s / ts for s, ts in zip(spacing, target_spacing)]
+    # Get spatial dimensions and scale factors
+    spatial_dims, scale_factors, needs_squeeze = _get_spatial_dims_and_scale(
+        image, spacing, target_spacing
+    )
 
-    # Determine spatial dimensions
-    ndim = len(spacing)
-    if image.dim() == 4:  # (B, C, Y, X) or (B, Z, Y, X)
-        if ndim == 2:
-            # 2D: (B, C, Y, X)
-            scale = (scale_factors[0], scale_factors[1])
-        elif ndim == 3:
-            # 3D without channel: (B, Z, Y, X)
-            scale = (scale_factors[0], scale_factors[1], scale_factors[2])
-        else:
-            raise ValueError(f"Image dims {image.dim()} incompatible with spacing dims {ndim}")
-    elif image.dim() == 5:  # (B, C, Z, Y, X)
-        if ndim == 3:
-            scale = (scale_factors[0], scale_factors[1], scale_factors[2])
-        else:
-            raise ValueError(f"Image dims {image.dim()} incompatible with spacing dims {ndim}")
-    else:
-        raise ValueError(f"Unsupported image dimensions: {image.dim()}")
+    # Prepare image for interpolation
+    work_image = image
+    if spatial_dims == 3 and needs_squeeze:
+        # (B, Z, Y, X) - add channel dimension for 3D interpolation
+        work_image = image.unsqueeze(1)  # (B, 1, Z, Y, X)
 
     # Resample using torch's interpolate
-    if ndim == 2:
+    if spatial_dims == 2:
         # 2D interpolation: (B, C, Y, X)
         mode_map = {"nearest": "nearest", "bilinear": "bilinear", "trilinear": "bilinear"}
         interp_mode = mode_map.get(mode, "bilinear")
         resampled = torch.nn.functional.interpolate(
-            image, scale_factor=scale, mode=interp_mode, align_corners=False
+            work_image, scale_factor=scale_factors, mode=interp_mode, align_corners=False
         )
-    else:  # 3D: (B, C, Z, Y, X) or (B, Z, Y, X)
-        # PyTorch's interpolate supports 5D tensors (B, C, D, H, W) with trilinear mode
-        if image.dim() == 4:  # (B, Z, Y, X) - add channel dimension
-            image = image.unsqueeze(1)  # (B, 1, Z, Y, X)
-            needs_squeeze = True
-        else:  # image.dim() == 5: (B, C, Z, Y, X)
-            needs_squeeze = False
-        
+    else:  # 3D: (B, C, Z, Y, X) or (B, 1, Z, Y, X)
         # Compute target size
-        target_size = tuple(int(image.shape[i + 2] * scale_factors[i]) for i in range(3))
-        
+        target_size = tuple(
+            int(work_image.shape[i + 2] * scale_factors[i]) for i in range(3)
+        )
+
         # Use trilinear interpolation for 3D
         mode_map = {"nearest": "nearest", "bilinear": "trilinear", "trilinear": "trilinear"}
         interp_mode = mode_map.get(mode, "trilinear")
         resampled = torch.nn.functional.interpolate(
-            image, size=target_size, mode=interp_mode, align_corners=False
+            work_image, size=target_size, mode=interp_mode, align_corners=False
         )
-        
+
         # Remove channel dimension if we added it
         if needs_squeeze:
             resampled = resampled.squeeze(1)  # (B, Z, Y, X)
@@ -195,21 +228,57 @@ def compute_one_hot(
     shape = list(labels.shape)
     one_hot = torch.zeros(*shape, num_classes, dtype=torch.float32, device=labels.device)
 
-    # Set ones for valid labels
+    # Use scatter_ for efficient one-hot encoding
+    labels_long = labels.long()
+    
     if ignore_index is not None:
-        valid_mask = labels != ignore_index
-        indices = labels[valid_mask].long()
-        valid_indices = torch.nonzero(valid_mask, as_tuple=False)
-        for idx, label_val in zip(valid_indices, indices):
-            one_hot[tuple(idx) + (label_val,)] = 1.0
+        # Mask out ignore_index values
+        valid_mask = labels_long != ignore_index
+        labels_valid = labels_long * valid_mask.long()  # Set ignored to 0
+        # Create indices for scatter: expand labels to match one_hot shape
+        labels_expanded = labels_valid.unsqueeze(-1)
+        # Scatter ones at the appropriate positions
+        one_hot.scatter_(-1, labels_expanded, 1.0)
+        # Zero out ignored positions
+        ignore_mask = (~valid_mask).unsqueeze(-1).expand_as(one_hot)
+        one_hot[ignore_mask] = 0.0
     else:
-        indices = labels.long()
-        # Use scatter_ or advanced indexing
-        for i in range(num_classes):
-            mask = indices == i
-            one_hot[..., i][mask] = 1.0
+        # Simple case: use scatter directly
+        labels_expanded = labels_long.unsqueeze(-1)
+        one_hot.scatter_(-1, labels_expanded, 1.0)
 
     return one_hot
+
+
+def _reduce_mean_case(
+    metrics: Tensor, batch_dim: int, class_dim: Optional[int], per_class: bool
+) -> Tensor:
+    """Reduce by averaging over cases (batch dimension)."""
+    if per_class and class_dim is not None:
+        # Average over cases, keep classes
+        return metrics.mean(dim=batch_dim)
+    else:
+        # Average over cases (and classes if present)
+        if class_dim is not None:
+            return metrics.mean(dim=(batch_dim, class_dim))
+        else:
+            return metrics.mean(dim=batch_dim)
+
+
+def _reduce_mean_class(metrics: Tensor, class_dim: Optional[int]) -> Tensor:
+    """Reduce by averaging over classes."""
+    if class_dim is not None:
+        return metrics.mean(dim=class_dim)
+    else:
+        return metrics  # No class dimension to reduce
+
+
+def _reduce_global(metrics: Tensor, batch_dim: int, class_dim: Optional[int]) -> Tensor:
+    """Reduce by averaging over both cases and classes."""
+    if class_dim is not None:
+        return metrics.mean(dim=(batch_dim, class_dim))
+    else:
+        return metrics.mean(dim=batch_dim)
 
 
 def reduce_metrics(
@@ -244,38 +313,30 @@ def reduce_metrics(
     if reduction == "none":
         return metrics
 
-    if dim is None:
-        # Infer dimensions based on shape
-        if metrics.dim() >= 2:
-            # Assume (B, C, ...) structure
-            batch_dim = 0
-            class_dim = 1 if metrics.dim() >= 2 else None
-        else:
-            batch_dim = 0
-            class_dim = None
+    # Use provided dim if specified
+    if dim is not None:
+        return metrics.mean(dim=dim)
 
-    if reduction == "mean-case":
-        if per_class and class_dim is not None:
-            # Average over cases, keep classes
-            return metrics.mean(dim=batch_dim)
-        else:
-            # Average over cases
-            if class_dim is not None:
-                return metrics.mean(dim=(batch_dim, class_dim))
-            else:
-                return metrics.mean(dim=batch_dim)
-    elif reduction == "mean-class":
-        if class_dim is not None:
-            return metrics.mean(dim=class_dim)
-        else:
-            return metrics  # No class dimension to reduce
-    elif reduction == "global":
-        if class_dim is not None:
-            return metrics.mean(dim=(batch_dim, class_dim))
-        else:
-            return metrics.mean(dim=batch_dim)
+    # Infer dimensions based on shape
+    if metrics.dim() >= 2:
+        # Assume (B, C, ...) structure
+        batch_dim = 0
+        class_dim = 1
     else:
+        batch_dim = 0
+        class_dim = None
+
+    # Dispatch based on reduction type
+    reduction_map = {
+        "mean-case": lambda: _reduce_mean_case(metrics, batch_dim, class_dim, per_class),
+        "mean-class": lambda: _reduce_mean_class(metrics, class_dim),
+        "global": lambda: _reduce_global(metrics, batch_dim, class_dim),
+    }
+
+    if reduction not in reduction_map:
         raise ValueError(f"Unknown reduction type: {reduction}")
+
+    return reduction_map[reduction]()
 
 
 def compute_weights(
@@ -309,11 +370,9 @@ def compute_weights(
     n_samples = flat_labels.numel()
     n_classes = len(unique_labels)
 
-    if method == "inverse_freq":
-        # Weight inversely proportional to frequency
-        class_weights = n_samples / (n_classes * counts.float())
-    elif method == "balanced":
-        # Balanced weights: n_samples / (n_classes * class_count)
+    # Both inverse_freq and balanced use the same formula
+    if method in ("inverse_freq", "balanced"):
+        # Weight inversely proportional to frequency: n_samples / (n_classes * class_count)
         class_weights = n_samples / (n_classes * counts.float())
     else:
         raise ValueError(f"Unknown weighting method: {method}")
