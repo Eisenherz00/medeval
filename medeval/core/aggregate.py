@@ -1,9 +1,9 @@
 """Aggregation utilities: bootstrap, jackknife, stratified aggregation, confidence intervals."""
 
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, Literal, Optional, Tuple, Union
 
 import numpy as np
-import torch
+import warnings
 from scipy import stats
 
 from medeval.core.typing import ArrayLike, Tensor, as_tensor
@@ -11,30 +11,36 @@ from medeval.core.typing import ArrayLike, Tensor, as_tensor
 AggregationMethod = Literal["mean", "median", "std", "sem"]
 
 
+def _sanitize_values(values: np.ndarray) -> np.ndarray:
+    """Return a 1D float array with non-finite values removed.
+
+    Notes
+    -----
+    Many metrics may yield `inf` (e.g., surface distances when one mask is empty)
+    or `nan` (e.g., undefined statistics). Aggregation should be robust and avoid
+    propagating non-finite values into CI computations.
+    """
+    values = np.asarray(values, dtype=float).reshape(-1)
+    finite = np.isfinite(values)
+    return values[finite]
+
+
 def _compute_statistic(values: np.ndarray, method: AggregationMethod) -> float:
-    """
-    Compute statistic from values array.
+    values = np.asarray(values, dtype=float).reshape(-1)
 
-    Parameters
-    ----------
-    values : np.ndarray
-        Input values array
-    method : AggregationMethod
-        Statistic to compute: "mean", "median", "std", "sem"
+    if values.size == 0:
+        return float("nan")
 
-    Returns
-    -------
-    float
-        Computed statistic
-    """
     if method == "mean":
         return float(np.mean(values))
     elif method == "median":
         return float(np.median(values))
     elif method == "std":
-        return float(np.std(values, ddof=1))
+        # With ddof=1, std is undefined for N<2.
+        return float(np.std(values, ddof=1)) if values.size >= 2 else float("nan")
     elif method == "sem":
-        return float(np.std(values, ddof=1) / np.sqrt(len(values)))
+        # SEM requires an estimate of std with ddof=1.
+        return float(np.std(values, ddof=1) / np.sqrt(values.size)) if values.size >= 2 else float("nan")
     else:
         raise ValueError(f"Unknown aggregation method: {method}")
 
@@ -92,20 +98,26 @@ def bootstrap_ci(
         (statistic, lower_bound, upper_bound)
     """
     values_np = _flatten_to_1d(values)
+    values_np = _sanitize_values(values_np)
     n = len(values_np)
 
-    if seed is not None:
-        np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+
+    if n == 0:
+        return float("nan"), float("nan"), float("nan")
 
     # Bootstrap sampling
     bootstrap_stats = []
     for _ in range(n_bootstrap):
-        indices = np.random.choice(n, size=n, replace=True)
+        indices = rng.integers(0, n, size=n)
         sample = values_np[indices]
         stat = _compute_statistic(sample, method)
         bootstrap_stats.append(stat)
 
     bootstrap_stats = np.array(bootstrap_stats)
+    bootstrap_stats = _sanitize_values(bootstrap_stats)
+    if bootstrap_stats.size == 0:
+        return float("nan"), float("nan"), float("nan")
 
     # Compute confidence interval
     alpha = 1.0 - confidence
@@ -144,7 +156,13 @@ def jackknife_ci(
         (statistic, lower_bound, upper_bound)
     """
     values_np = _flatten_to_1d(values)
+    values_np = _sanitize_values(values_np)
     n = len(values_np)
+
+    if n < 2:
+        # Not enough samples for jackknife CI.
+        stat = _compute_statistic(values_np, method)
+        return float(stat), float("nan"), float("nan")
 
     # Compute full statistic
     full_stat = _compute_statistic(values_np, method)
@@ -211,14 +229,20 @@ def aggregate_metrics(
     results = {}
 
     for name, values in metrics.items():
-        values_np = _flatten_to_1d(values)
+        values_np = _sanitize_values(_flatten_to_1d(values))
+        if values_np.size == 0:
+            warnings.warn(
+                f"Metric '{name}' has no finite samples; returning NaN.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         stat = _compute_statistic(values_np, method)
 
         if compute_ci:
             if ci_method == "bootstrap":
-                _, lower, upper = bootstrap_ci(values, confidence, n_bootstrap, method, seed)
+                _, lower, upper = bootstrap_ci(values_np, confidence, n_bootstrap, method, seed)
             else:
-                _, lower, upper = jackknife_ci(values, confidence, method)
+                _, lower, upper = jackknife_ci(values_np, confidence, method)
             results[name] = (stat, lower, upper)
         else:
             results[name] = stat
@@ -272,18 +296,22 @@ def stratified_aggregate(
     results = {}
 
     for metric_name, values in metrics.items():
-        values_np = _flatten_to_1d(values)
+        values_np_raw = _flatten_to_1d(values)
 
-        if len(values_np) != len(strata_np):
+        if len(values_np_raw) != len(strata_np):
             raise ValueError(
-                f"Metric {metric_name} length {len(values_np)} != strata length {len(strata_np)}"
+                f"Metric {metric_name} length {len(values_np_raw)} != strata length {len(strata_np)}"
             )
+
+        # Sanitize after checking alignment with strata.
+        values_np = np.asarray(values_np_raw, dtype=float).reshape(-1)
 
         results[metric_name] = {}
 
         for stratum in unique_strata:
             mask = strata_np == stratum
             stratum_values = values_np[mask]
+            stratum_values = _sanitize_values(stratum_values)
             stat = _compute_statistic(stratum_values, method)
 
             if compute_ci:
@@ -291,9 +319,8 @@ def stratified_aggregate(
                     _, lower, upper = bootstrap_ci(stratum_values, confidence, n_bootstrap, method, seed)
                 else:
                     _, lower, upper = jackknife_ci(stratum_values, confidence, method)
-                results[metric_name][str(int(stratum))] = (stat, lower, upper)
+                results[metric_name][str(stratum)] = (stat, lower, upper)
             else:
-                results[metric_name][str(int(stratum))] = stat
+                results[metric_name][str(stratum)] = stat
 
     return results
-

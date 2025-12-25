@@ -15,6 +15,7 @@ from scipy.spatial.distance import cdist
 from medeval.core.typing import ArrayLike, Device, Tensor, as_tensor
 from medeval.core.utils import ReductionType, apply_spacing, compute_one_hot, reduce_metrics
 
+
 try:
     from scipy.ndimage import distance_transform_edt
 except ImportError:
@@ -22,18 +23,45 @@ except ImportError:
     distance_transform_edt = None
 
 
+# Helper to ensure batch dimension
+def _ensure_batch(pred: Tensor, target: Tensor) -> Tuple[Tensor, Tensor]:
+    """Ensure a leading batch dimension.
+
+    This repo currently mixes conventions. For metrics we standardize to:
+    - single 2D mask: (H, W)  -> (1, H, W)
+    - single 3D mask: (H, W, D)/(Z,Y,X) -> (1, H, W, D)
+
+    We do NOT try to infer channels here; channel handling is done elsewhere.
+    """
+    if pred.dim() in (2, 3):
+        pred = pred.unsqueeze(0)
+    if target.dim() in (2, 3):
+        target = target.unsqueeze(0)
+    return pred, target
+
+
+
 def _ensure_binary(pred: Tensor, target: Tensor, threshold: float = 0.5) -> Tuple[Tensor, Tensor]:
-    """Ensure binary masks from predictions and targets."""
+    """Ensure binary masks from predictions and targets.
+
+    Notes
+    -----
+    - Ensures a batch dimension for unbatched inputs.
+    - Only squeezes a channel dimension when we are in a clear (B, C, ...) layout
+      (i.e., tensors with >=4 dims).
+    """
+    pred, target = _ensure_batch(pred, target)
+
     # Ensure same number of dimensions
     while pred.dim() < target.dim():
         pred = pred.unsqueeze(0)
     while target.dim() < pred.dim():
         target = target.unsqueeze(0)
 
-    # Remove channel dimension if it's size 1
-    if pred.dim() > 1 and pred.shape[1] == 1:
+    # Remove channel dimension if it's size 1 (only for (B, C, ...))
+    if pred.dim() >= 4 and pred.shape[1] == 1:
         pred = pred.squeeze(1)
-    if target.dim() > 1 and target.shape[1] == 1:
+    if target.dim() >= 4 and target.shape[1] == 1:
         target = target.squeeze(1)
 
     if pred.dtype.is_floating_point:
@@ -106,8 +134,10 @@ def _compute_hausdorff_distance(
     float
         Hausdorff distance (or percentile)
     """
+    # Undefined if one of the surfaces is empty.
+    # The caller should decide how to aggregate NaNs.
     if len(pred_surface) == 0 or len(target_surface) == 0:
-        return float("inf")
+        return float("nan")
 
     # Compute distances from pred to target
     dists_pred_to_target = cdist(pred_surface, target_surface, metric="euclidean")
@@ -159,6 +189,7 @@ def dice_score(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     # Handle ignore_index
     if ignore_index is not None:
@@ -276,6 +307,7 @@ def jaccard_index(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     if ignore_index is not None:
         mask = target != ignore_index
@@ -364,6 +396,7 @@ def precision_score(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     if ignore_index is not None:
         mask = target != ignore_index
@@ -414,6 +447,7 @@ def recall_score(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     if ignore_index is not None:
         mask = target != ignore_index
@@ -464,6 +498,7 @@ def volumetric_similarity(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     if ignore_index is not None:
         mask = target != ignore_index
@@ -517,6 +552,7 @@ def hausdorff_distance(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     # Convert to numpy for surface computation
     pred_np = pred.cpu().numpy()
@@ -544,13 +580,25 @@ def hausdorff_distance(
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
+                # Empty-set handling
+                if len(pred_surface) == 0 and len(target_surface) == 0:
+                    class_hds.append(0.0)
+                    continue
+                if len(pred_surface) == 0 or len(target_surface) == 0:
+                    class_hds.append(float("nan"))
+                    continue
+
                 hd = _compute_hausdorff_distance(pred_surface, target_surface, percentile)
                 class_hds.append(hd)
 
             if class_hds:
-                hd_scores.append(np.mean(class_hds))
+                # NaN-aware mean: ignore undefined classes (e.g., one empty surface)
+                if np.all(np.isnan(class_hds)):
+                    hd_scores.append(float("nan"))
+                else:
+                    hd_scores.append(float(np.nanmean(class_hds)))
             else:
-                hd_scores.append(float("inf"))
+                hd_scores.append(float("nan"))
         else:
             # Binary case
             if pred_b.ndim > 1:
@@ -568,6 +616,14 @@ def hausdorff_distance(
 
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
+
+            # Empty-set handling
+            if len(pred_surface) == 0 and len(target_surface) == 0:
+                hd_scores.append(0.0)
+                continue
+            if len(pred_surface) == 0 or len(target_surface) == 0:
+                hd_scores.append(float("nan"))
+                continue
 
             hd = _compute_hausdorff_distance(pred_surface, target_surface, percentile)
             hd_scores.append(hd)
@@ -639,6 +695,7 @@ def average_symmetric_surface_distance(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     pred_np = pred.cpu().numpy()
     target_np = target.cpu().numpy()
@@ -664,8 +721,14 @@ def average_symmetric_surface_distance(
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
+                # Empty-set handling:
+                # - both empty => 0.0 (perfect match)
+                # - one empty  => NaN (undefined)
+                if len(pred_surface) == 0 and len(target_surface) == 0:
+                    class_assds.append(0.0)
+                    continue
                 if len(pred_surface) == 0 or len(target_surface) == 0:
-                    class_assds.append(float("inf"))
+                    class_assds.append(float("nan"))
                     continue
 
                 # Compute distances
@@ -679,9 +742,12 @@ def average_symmetric_surface_distance(
                 class_assds.append(assd)
 
             if class_assds:
-                assd_scores.append(np.mean(class_assds))
+                if np.all(np.isnan(class_assds)):
+                    assd_scores.append(float("nan"))
+                else:
+                    assd_scores.append(float(np.nanmean(class_assds)))
             else:
-                assd_scores.append(float("inf"))
+                assd_scores.append(float("nan"))
         else:
             # Binary case
             if pred_b.ndim > 1:
@@ -700,8 +766,14 @@ def average_symmetric_surface_distance(
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
 
+            # Empty-set handling:
+            # - both empty => 0.0
+            # - one empty  => NaN
+            if len(pred_surface) == 0 and len(target_surface) == 0:
+                assd_scores.append(0.0)
+                continue
             if len(pred_surface) == 0 or len(target_surface) == 0:
-                assd_scores.append(float("inf"))
+                assd_scores.append(float("nan"))
                 continue
 
             dists_pred_to_target = cdist(pred_surface, target_surface, metric="euclidean")
@@ -752,6 +824,7 @@ def surface_dice(
     """
     pred = as_tensor(pred)
     target = as_tensor(target)
+    pred, target = _ensure_batch(pred, target)
 
     pred_np = pred.cpu().numpy()
     target_np = target.cpu().numpy()
@@ -776,6 +849,12 @@ def surface_dice(
                 pred_surface = _get_surface_points(pred_c, spacing)
                 target_surface = _get_surface_points(target_c, spacing)
 
+                # Empty-set handling:
+                # - both empty => 1.0 (perfect match)
+                # - one empty  => 0.0 (miss)
+                if len(pred_surface) == 0 and len(target_surface) == 0:
+                    class_scores.append(1.0)
+                    continue
                 if len(pred_surface) == 0 or len(target_surface) == 0:
                     class_scores.append(0.0)
                     continue
@@ -795,7 +874,7 @@ def surface_dice(
                 class_scores.append(surface_dice)
 
             if class_scores:
-                surface_dice_scores.append(np.mean(class_scores))
+                surface_dice_scores.append(float(np.mean(class_scores)))
             else:
                 surface_dice_scores.append(0.0)
         else:
@@ -816,6 +895,12 @@ def surface_dice(
             pred_surface = _get_surface_points(pred_binary, spacing)
             target_surface = _get_surface_points(target_binary, spacing)
 
+            # Empty-set handling:
+            # - both empty => 1.0
+            # - one empty  => 0.0
+            if len(pred_surface) == 0 and len(target_surface) == 0:
+                surface_dice_scores.append(1.0)
+                continue
             if len(pred_surface) == 0 or len(target_surface) == 0:
                 surface_dice_scores.append(0.0)
                 continue
