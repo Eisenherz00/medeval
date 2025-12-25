@@ -65,6 +65,19 @@ bash demo_external_user/run_cli.sh
 The `demo_external_user/` directory provides a **realistic, end-to-end example** of how an external user would interact with MedEval using their own data.  
 It demonstrates **data preparation → evaluation → aggregation → visualization** using both the Python API and the CLI.
 
+### TL;DR (10 lines)
+
+1. `python demo_external_user/gen_data.py` generates synthetic segmentation + classification data (no PHI).
+2. It writes a segmentation manifest with **100 cases**, patient IDs, and `strata` (site/scanner-like).
+3. `python demo_external_user/run_example.py` is the recommended “real user” entry point.
+4. It loads `manifest_seg.csv`, then iterates cases and reads each NIfTI (pred/target) + spacing metadata.
+5. It normalizes shapes to `(B, C, *spatial)` and computes per-case metrics (Dice/IoU/HD95/ASSD/Surface Dice).
+6. It saves per-case results to `out_example/segmentation_results.csv`.
+7. It aggregates by `strata` and saves `out_example/segmentation_summary_by_strata.csv`.
+8. It loads classification probs/labels, computes sample-level metrics + calibration (AUROC/AUPRC/Accuracy/ECE).
+9. It aggregates classification to patient-level (grouped AUROC) and saves `out_example/classification_results.json`.
+10. If `matplotlib` is installed, it also writes plots (Dice hist/box, HD95 hist, ROC, reliability diagram).
+
 ### What This Demo Simulates
 - Multiple **patients**, **cases**, and **strata** (e.g. sites/scanners)
 - 3D segmentation with physical voxel spacing
