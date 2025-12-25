@@ -52,9 +52,11 @@ class MedicalPrediction:
         if self.spacing is not None:
             spatial_dims = self._get_spatial_dims()
             if len(self.spacing) != spatial_dims:
+                data_shape = self.to_tensor().shape
                 raise ValueError(
-                    f"Spacing dimension {len(self.spacing)} does not match "
-                    f"spatial dimensions {spatial_dims}"
+                    f"Spacing dimension {len(self.spacing)} does not match."
+                    f"spatial dimensions {spatial_dims} for data shape {data_shape}."
+                    f"Expected spacing with {spatial_dims} values, got {len(self.spacing)}."
                 )
 
     def _get_spatial_dims(self) -> int:
