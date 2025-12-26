@@ -26,46 +26,59 @@ def _check_matplotlib():
 
 def plot_error_histogram(
     errors: ArrayLike,
-    bins: Union[int, ArrayLike] = 50,
+    bins: Union[int, str, ArrayLike] = 20,
     ax: Optional["plt.Axes"] = None,
     color: str = "#1f77b4",
+    density: bool = False,
     show_stats: bool = True,
     show_percentiles: bool = True,
     percentiles: List[float] = [50, 95],
     xlabel: str = "Error",
     title: Optional[str] = None,
     figsize: Tuple[int, int] = (10, 6),
+    legend_loc: str = "auto",
 ) -> Tuple[Figure, "plt.Axes"]:
     """
-    Plot histogram of errors with statistics.
+    Plot histogram of errors/metrics with statistics.
 
     Parameters
     ----------
     errors : ArrayLike
-        Error values
-    bins : int or ArrayLike
-        Number of bins or bin edges
+        Error or metric values (e.g., Dice scores)
+    bins : int, str, or ArrayLike
+        Number of bins, 'auto' for automatic selection, or bin edges
     ax : plt.Axes, optional
         Axes to plot on
     color : str
         Histogram color
+    density : bool
+        If True, plot probability density instead of counts
     show_stats : bool
-        If True, show mean and std in legend
+        If True, show mean and std in a text box
     show_percentiles : bool
         If True, show percentile lines
     percentiles : List[float]
-        Percentiles to show
+        Percentiles to show (default: [50, 95])
     xlabel : str
         X-axis label
     title : str, optional
         Plot title
     figsize : Tuple[int, int]
         Figure size
+    legend_loc : str
+        Legend location ('auto' places it opposite to the data mass)
 
     Returns
     -------
     Tuple[Figure, plt.Axes]
         Figure and axes objects
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import medeval.vis as vis
+    >>> dice_scores = np.random.beta(8, 2, 100)  # Typical left-skewed Dice distribution
+    >>> fig, ax = vis.plot_error_histogram(dice_scores, xlabel='Dice Score')
     """
     _check_matplotlib()
 
@@ -77,37 +90,53 @@ def plot_error_histogram(
         fig = ax.get_figure()
 
     # Plot histogram
-    n, bin_edges, patches = ax.hist(errors, bins=bins, color=color, alpha=0.7, edgecolor="black", linewidth=0.5)
+    n, bin_edges, patches = ax.hist(
+        errors, bins=bins, color=color, alpha=0.7, 
+        edgecolor="black", linewidth=0.5, density=density
+    )
 
     # Compute statistics
     mean_val = np.mean(errors)
     std_val = np.std(errors)
     median_val = np.median(errors)
 
+    # Determine legend/stats position based on data distribution
+    # If median > midpoint of range, data is right-skewed, put legend on left
+    data_range = errors.max() - errors.min()
+    midpoint = errors.min() + data_range / 2
+    data_is_right_heavy = median_val > midpoint
+
+    if legend_loc == "auto":
+        legend_loc = "upper left" if data_is_right_heavy else "upper right"
+    
+    # Stats box position opposite to legend
+    stats_x = 0.02 if not data_is_right_heavy else 0.98
+    stats_ha = "left" if not data_is_right_heavy else "right"
+
     # Add mean line
-    ax.axvline(mean_val, color="red", linestyle="--", linewidth=2, label=f"Mean = {mean_val:.3f}")
+    ax.axvline(mean_val, color="#d62728", linestyle="--", linewidth=2, label=f"Mean = {mean_val:.3f}")
 
     # Add percentile lines
     if show_percentiles:
-        colors = ["orange", "green", "purple"]
+        percentile_colors = ["#ff7f0e", "#2ca02c", "#9467bd"]  # orange, green, purple
         for i, p in enumerate(percentiles):
             pval = np.percentile(errors, p)
-            ax.axvline(pval, color=colors[i % len(colors)], linestyle=":", linewidth=2,
-                      label=f"{p}th percentile = {pval:.3f}")
+            ax.axvline(pval, color=percentile_colors[i % len(percentile_colors)], 
+                      linestyle=":", linewidth=2, label=f"{p}th pctl = {pval:.3f}")
 
     ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_ylabel("Count", fontsize=12)
-    ax.set_title(title or "Error Distribution", fontsize=14)
+    ax.set_ylabel("Density" if density else "Count", fontsize=12)
+    ax.set_title(title or "Distribution", fontsize=14)
     ax.grid(True, alpha=0.3)
 
-    # Add statistics text
+    # Add statistics text box (positioned to avoid overlap)
     if show_stats:
-        stats_text = f"Mean: {mean_val:.3f}\nStd: {std_val:.3f}\nMedian: {median_val:.3f}"
-        ax.text(0.95, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
-                verticalalignment="top", horizontalalignment="right",
-                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+        stats_text = f"n = {len(errors)}\nMean: {mean_val:.3f}\nStd: {std_val:.3f}"
+        ax.text(stats_x, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+                verticalalignment="top", horizontalalignment=stats_ha,
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.7))
 
-    ax.legend(loc="upper right", fontsize=9)
+    ax.legend(loc=legend_loc, fontsize=9, framealpha=0.9)
 
     return fig, ax
 

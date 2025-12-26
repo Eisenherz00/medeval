@@ -13,10 +13,13 @@ from medeval.vis.curves import (
     plot_froc_curve,
     plot_multiple_roc_curves,
     plot_multiple_pr_curves,
+    plot_roc_from_predictions,
+    plot_pr_from_predictions,
 )
 
 from medeval.vis.calibration import (
     plot_reliability_diagram,
+    plot_reliability_from_predictions,
     plot_calibration_comparison,
     plot_decision_curve,
     plot_confidence_histogram,
@@ -42,8 +45,11 @@ __all__ = [
     "plot_froc_curve",
     "plot_multiple_roc_curves",
     "plot_multiple_pr_curves",
+    "plot_roc_from_predictions",
+    "plot_pr_from_predictions",
     # Calibration
     "plot_reliability_diagram",
+    "plot_reliability_from_predictions",
     "plot_calibration_comparison",
     "plot_decision_curve",
     "plot_confidence_histogram",

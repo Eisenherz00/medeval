@@ -243,8 +243,14 @@ def dice_score(
         target_check = target.squeeze(1) if target.dim() >= 3 and target.shape[1] == 1 else target
         
         # Check if these are integer labels (more than 2 unique values)
-        pred_unique = len(torch.unique(pred_check))
-        target_unique = len(torch.unique(target_check))
+        # Exclude ignore_index from unique count to avoid false multi-class detection
+        pred_unique_vals = torch.unique(pred_check)
+        target_unique_vals = torch.unique(target_check)
+        if ignore_index is not None:
+            pred_unique_vals = pred_unique_vals[pred_unique_vals != ignore_index]
+            target_unique_vals = target_unique_vals[target_unique_vals != ignore_index]
+        pred_unique = len(pred_unique_vals)
+        target_unique = len(target_unique_vals)
         
         if pred_unique > 2 or target_unique > 2:
             is_integer_labels = True

@@ -13,6 +13,9 @@ from medeval.core.io import (
     save_nifti,
 )
 
+# Skip all NIfTI tests if nibabel is not installed
+nib = pytest.importorskip("nibabel", reason="nibabel is required for NIfTI tests")
+
 
 @pytest.mark.acceptance
 def test_nifti_spacing_roundtrip():
