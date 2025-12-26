@@ -1,4 +1,16 @@
-"""IO adapters for NumPy, PyTorch, SimpleITK/NIfTI, and optional DICOM."""
+"""IO adapters for NumPy, PyTorch, SimpleITK/NIfTI, and optional DICOM.
+
+Spacing/axis conventions
+------------------------
+Internally, MedEval uses array-index order for spacing, matching common tensor layouts:
+
+- **2D arrays** are treated as `(Y, X)` with spacing `(dy, dx)`
+- **3D arrays** are treated as `(Z, Y, X)` with spacing `(dz, dy, dx)`
+
+NIfTI (via nibabel) stores data in `(X, Y, Z)` axis order, and header zooms are `(dx, dy, dz)`.
+Therefore, for NIfTI we **transpose** between `(Z, Y, X)` and `(X, Y, Z)` and **reverse**
+spacing tuples when reading/writing so that the MedEval contract stays consistent.
+"""
 
 from typing import Dict, Optional, Tuple, Union
 
@@ -127,6 +139,15 @@ def load_nifti(
     nii = nib.load(path)
     data = nii.get_fdata()
 
+    # Normalize axis order to MedEval convention:
+    # - nibabel: (X, Y, Z, ...)
+    # - medeval: (Z, Y, X, ...)
+    if data.ndim >= 3:
+        axes = (2, 1, 0) + tuple(range(3, data.ndim))
+        data = np.transpose(data, axes)
+    elif data.ndim == 2:
+        data = np.transpose(data, (1, 0))
+
     if as_torch:
         tensor = as_tensor(data, device=device)
         if dtype is not None:
@@ -167,21 +188,35 @@ def save_nifti(
     if isinstance(data, torch.Tensor):
         data = data.cpu().numpy()
 
-    # Determine spatial dimensions
+    # Determine spatial dimensions (MedEval convention: 2D=(Y,X), 3D=(Z,Y,X))
     ndim = data.ndim
     if ndim > 3:
-        # Assume (B, C, Z, Y, X) or similar - take first element
+        # Assume (B, C, Z, Y, X) or similar - take first element's spatial volume.
         data = data.reshape(-1, *data.shape[-3:])[0]
+        ndim = data.ndim
 
-    spatial_dims = min(ndim, 3)
+    spatial_dims = min(ndim, 3)  # 2 or 3
+
+    # Transpose to nibabel axis order:
+    # - 2D: (Y, X) -> (X, Y)
+    # - 3D: (Z, Y, X) -> (X, Y, Z)
+    if data.ndim == 2:
+        data_nifti = np.transpose(data, (1, 0))
+    elif data.ndim == 3:
+        data_nifti = np.transpose(data, (2, 1, 0))
+    else:
+        # Fallback: keep as-is (should be rare for NIfTI here)
+        data_nifti = data
 
     # Build affine matrix
     if affine is None:
         affine = np.eye(4)
         if spacing is not None:
-            for i, s in enumerate(spacing):
+            # MedEval spacing is (dy,dx) or (dz,dy,dx); nibabel wants (dx,dy,dz)
+            spacing_nifti = tuple(reversed(tuple(spacing)))
+            for i, s in enumerate(spacing_nifti):
                 if i < 3:
-                    affine[i, i] = s
+                    affine[i, i] = float(s)
         else:
             # Default spacing
             for i in range(spatial_dims):
@@ -197,8 +232,8 @@ def save_nifti(
                 for j in range(min(direction.shape[1], 3)):
                     affine[i, j] = direction[i, j]
 
-    # Create NIfTI image
-    nii = nib.Nifti1Image(data, affine)
+    # Create NIfTI image (data in nibabel axis order)
+    nii = nib.Nifti1Image(data_nifti, affine)
     nib.save(nii, path)
 
 
@@ -223,10 +258,20 @@ def get_nifti_spacing(path: str) -> Tuple[float, ...]:
     affine = nii.affine
     header = nii.header
 
-    # Extract spacing from affine diagonal or header
-    spacing = header.get_zooms()[:3]  # Get first 3 zooms
-
-    return tuple(float(s) for s in spacing)
+    # nibabel zooms are in axis order (dx, dy, dz, ...).
+    # Convert to MedEval convention:
+    # - 2D: (dy, dx)
+    # - 3D: (dz, dy, dx)
+    zooms = header.get_zooms()
+    if len(zooms) >= 3:
+        spacing_nifti = zooms[:3]  # (dx,dy,dz)
+        spacing_medeval = (float(spacing_nifti[2]), float(spacing_nifti[1]), float(spacing_nifti[0]))
+        return spacing_medeval
+    if len(zooms) == 2:
+        spacing_nifti = zooms[:2]  # (dx,dy)
+        return (float(spacing_nifti[1]), float(spacing_nifti[0]))
+    # Fallback
+    return tuple(float(s) for s in zooms)
 
 
 def load_sitk(

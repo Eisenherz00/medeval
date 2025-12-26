@@ -1,0 +1,2 @@
+index,status,patient_id,strata,iou_mean,mAP@0.50,precision,recall
+0,success,,,1.0,1.0,1.0,1.0

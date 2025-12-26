@@ -1,0 +1,2 @@
+index,status,error
+0,error,nibabel is required for NIfTI support. Install with: pip install nibabel

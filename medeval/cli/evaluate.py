@@ -60,6 +60,7 @@ def _load_prediction_target(
     row: pd.Series,
     pred_col: str = "prediction",
     target_col: str = "target",
+    base_dir: Optional[Path] = None,
     spacing_col: Optional[str] = "spacing",
     patient_col: Optional[str] = "patient_id",
     strata_col: Optional[str] = "strata",
@@ -87,41 +88,72 @@ def _load_prediction_target(
     Tuple[MedicalPrediction, MedicalPrediction]
         Loaded prediction and target
     """
-    pred_path = str(row[pred_col])
-    target_path = str(row[target_col])
+    pred_path_raw = str(row[pred_col])
+    target_path_raw = str(row[target_col])
+
+    # Resolve relative paths with respect to the manifest directory.
+    # This makes CLI runs robust regardless of the current working directory.
+    pred_path = pred_path_raw
+    target_path = target_path_raw
+    if base_dir is not None:
+        try:
+            p = Path(pred_path_raw)
+            if not p.is_absolute():
+                pred_path = str((base_dir / p).resolve())
+        except Exception:
+            pred_path = pred_path_raw
+        try:
+            t = Path(target_path_raw)
+            if not t.is_absolute():
+                target_path = str((base_dir / t).resolve())
+        except Exception:
+            target_path = target_path_raw
 
     # Load data
     pred_data = load_image(pred_path, as_torch=True)
     target_data = load_image(target_path, as_torch=True)
 
-    # Ensure batch and channel dimensions exist.
-    # File loaders often return (H,W) or (Z,Y,X) without batch/channel.
-    # Our metric APIs generally expect (B, ...) or (B, C, ...).
-    if isinstance(pred_data, torch.Tensor) and pred_data.dim() in (2, 3):
-        pred_data = pred_data.unsqueeze(0)
-    if isinstance(target_data, torch.Tensor) and target_data.dim() in (2, 3):
-        target_data = target_data.unsqueeze(0)
+    # Detection special-case:
+    # If the tensors look like Nx(6/8) box tables, do not add batch/channel dims.
+    # (The detection metric APIs expect a flat table.)
+    is_detection_table = (
+        isinstance(pred_data, torch.Tensor)
+        and isinstance(target_data, torch.Tensor)
+        and pred_data.dim() == 2
+        and target_data.dim() == 2
+        and int(pred_data.shape[-1]) in (6, 8)
+        and int(target_data.shape[-1]) in (6, 8)
+    )
 
-    # Add an explicit channel dimension for common cases:
-    # - 2D: (B, H, W) -> (B, 1, H, W)
-    # - 3D: (B, Z, Y, X) -> (B, 1, Z, Y, X)
-    if isinstance(pred_data, torch.Tensor):
-        if pred_data.dim() == 3:
-            pred_data = pred_data.unsqueeze(1)
-        elif pred_data.dim() == 4:
-            # Heuristic: if axis-1 looks like channels (small), keep as-is.
-            # Otherwise treat as (B, Z, Y, X) and add a channel.
-            c_or_z = int(pred_data.shape[1])
-            if c_or_z not in (1, 2, 3, 4):
+    if not is_detection_table:
+        # Ensure batch and channel dimensions exist.
+        # File loaders often return (H,W) or (Z,Y,X) without batch/channel.
+        # Our metric APIs generally expect (B, ...) or (B, C, ...).
+        if isinstance(pred_data, torch.Tensor) and pred_data.dim() in (2, 3):
+            pred_data = pred_data.unsqueeze(0)
+        if isinstance(target_data, torch.Tensor) and target_data.dim() in (2, 3):
+            target_data = target_data.unsqueeze(0)
+
+        # Add an explicit channel dimension for common cases:
+        # - 2D: (B, H, W) -> (B, 1, H, W)
+        # - 3D: (B, Z, Y, X) -> (B, 1, Z, Y, X)
+        if isinstance(pred_data, torch.Tensor):
+            if pred_data.dim() == 3:
                 pred_data = pred_data.unsqueeze(1)
+            elif pred_data.dim() == 4:
+                # Heuristic: if axis-1 looks like channels (small), keep as-is.
+                # Otherwise treat as (B, Z, Y, X) and add a channel.
+                c_or_z = int(pred_data.shape[1])
+                if c_or_z not in (1, 2, 3, 4):
+                    pred_data = pred_data.unsqueeze(1)
 
-    if isinstance(target_data, torch.Tensor):
-        if target_data.dim() == 3:
-            target_data = target_data.unsqueeze(1)
-        elif target_data.dim() == 4:
-            c_or_z = int(target_data.shape[1])
-            if c_or_z not in (1, 2, 3, 4):
+        if isinstance(target_data, torch.Tensor):
+            if target_data.dim() == 3:
                 target_data = target_data.unsqueeze(1)
+            elif target_data.dim() == 4:
+                c_or_z = int(target_data.shape[1])
+                if c_or_z not in (1, 2, 3, 4):
+                    target_data = target_data.unsqueeze(1)
 
     # Debug: final tensor shapes after normalization
     try:
@@ -264,11 +296,42 @@ def _compute_detection_metrics(
     config: Dict[str, Any],
 ) -> Dict[str, float]:
     """Compute detection metrics for a single case."""
-    # Detection requires special handling for boxes/scores
-    # This is a simplified version
-    return {
-        "status_code": 0.0,  # Placeholder until fully implemented
-    }
+    from medeval.metrics.detection import compute_detection_metrics
+
+    pred_boxes = pred.to_tensor()
+    target_boxes = target.to_tensor()
+
+    # Boxes are expected as a table:
+    # - 2D: (N, 6)  -> [x1,y1,x2,y2,score,class_id]
+    # - 3D: (N, 8)  -> [x1,y1,z1,x2,y2,z2,score,class_id]
+    if pred_boxes.dim() != 2 or target_boxes.dim() != 2:
+        raise ValueError(
+            f"Detection expects (N,6) or (N,8) box tables; got pred={tuple(pred_boxes.shape)} target={tuple(target_boxes.shape)}"
+        )
+
+    use_3d = bool(config.get("use_3d", int(pred_boxes.shape[1]) == 8 or int(target_boxes.shape[1]) == 8))
+    iou_thresholds = config.get("iou_thresholds", [0.5, 0.75])
+    include_froc = bool(config.get("include_froc", False))
+
+    results = compute_detection_metrics(
+        pred_boxes,
+        target_boxes,
+        iou_thresholds=iou_thresholds,
+        use_3d=use_3d,
+        include_froc=include_froc,
+    )
+
+    # Keep only scalar outputs for CSV aggregation.
+    out: Dict[str, float] = {}
+    for k, v in results.items():
+        if isinstance(v, np.ndarray):
+            # FROC curve arrays are not per-case scalars; skip them in CSV output.
+            continue
+        if isinstance(v, torch.Tensor):
+            out[k] = float(v.item())
+        else:
+            out[k] = float(v)
+    return out
 
 
 def _compute_registration_metrics(
@@ -356,6 +419,7 @@ def _process_single_case(
     metric_fn: Callable,
     metric_config: Dict[str, Any],
     col_config: Dict[str, str],
+    base_dir: Optional[Path] = None,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, float]], Optional[str]]:
     """
     Process a single case and return metrics.
@@ -384,6 +448,7 @@ def _process_single_case(
             row,
             pred_col=col_config["prediction"],
             target_col=col_config["target"],
+            base_dir=base_dir,
             spacing_col=col_config.get("spacing"),
             patient_col=col_config.get("patient_id"),
             strata_col=col_config.get("strata"),
@@ -606,9 +671,11 @@ def evaluate_command(args, config: Dict) -> int:
     all_metrics: Dict[str, List[float]] = {}
     strata_data: List[Optional[str]] = []
 
+    base_dir = Path(manifest_path).parent
+
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating", unit="case"):
         result, metrics, strata = _process_single_case(
-            row, idx, metric_fn, metric_config, col_config
+            row, idx, metric_fn, metric_config, col_config, base_dir=base_dir
         )
         all_results.append(result)
 

@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from medeval.core.utils import normalize_input_shapes
 from medeval.core.typing import as_tensor
+from medeval.core.io import save_nifti
 
 DATA_DIR = DEMO_DIR / "data"
 SEG_DIR = DATA_DIR / "seg"
@@ -48,11 +49,10 @@ def generate_segmentation_data(
     rows = []
 
     try:
-        import nibabel as nib
-
-        use_nib = True
+        import nibabel as _  # noqa: F401
+        use_nifti = True
     except ImportError:
-        use_nib = False
+        use_nifti = False
         print("  nibabel not available, falling back to .npy format")
 
     for p in range(n_patients):
@@ -91,16 +91,12 @@ def generate_segmentation_data(
                 pred = np.clip(pred + fp_blob, 0, 1)
 
             # Save files
-            if use_nib:
-                affine = np.diag([spacing[2], spacing[1], spacing[0], 1.0])  # dx, dy, dz
-                pred_nii = nib.Nifti1Image(pred, affine)
-                target_nii = nib.Nifti1Image(target, affine)
-
+            if use_nifti:
                 pred_path = SEG_DIR / f"{case_id}_pred.nii.gz"
                 target_path = SEG_DIR / f"{case_id}_tgt.nii.gz"
-
-                nib.save(pred_nii, str(pred_path))
-                nib.save(target_nii, str(target_path))
+                # MedEval save_nifti expects data in (Z,Y,X) with spacing (dz,dy,dx)
+                save_nifti(pred, str(pred_path), spacing=spacing)
+                save_nifti(target, str(target_path), spacing=spacing)
             else:
                 pred_path = SEG_DIR / f"{case_id}_pred.npy"
                 target_path = SEG_DIR / f"{case_id}_tgt.npy"
@@ -120,14 +116,15 @@ def generate_segmentation_data(
             with open(meta_path, "w") as f:
                 json.dump(meta, f, indent=2)
 
-            # Collect manifest row with relative paths
+            # Collect manifest row with relative paths (aligned to CLI defaults)
             rows.append(
                 {
                     "case_id": case_id,
                     "patient_id": patient_id,
                     "strata": stratum,
-                    "pred_path": str(pred_path.relative_to(DEMO_DIR)),
-                    "target_path": str(target_path.relative_to(DEMO_DIR)),
+                    "prediction": str(pred_path.relative_to(DEMO_DIR)),
+                    "target": str(target_path.relative_to(DEMO_DIR)),
+                    "spacing": ",".join(map(str, spacing)),
                     "meta_path": str(meta_path.relative_to(DEMO_DIR)),
                 }
             )
@@ -145,7 +142,7 @@ def generate_segmentation_data(
 
 def write_segmentation_manifest(rows, manifest_path: Path) -> None:
     """Write segmentation manifest CSV for CLI and example scripts."""
-    fieldnames = ["case_id", "patient_id", "strata", "pred_path", "target_path", "meta_path"]
+    fieldnames = ["case_id", "patient_id", "strata", "prediction", "target", "spacing", "meta_path"]
     with open(manifest_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

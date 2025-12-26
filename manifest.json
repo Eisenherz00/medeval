@@ -1,0 +1,8 @@
+[
+  {
+    "task": "segmentation",
+    "prediction": "pred.nii.gz",
+    "target": "target.nii.gz",
+    "spacing": [1, 1, 3]
+  }
+]

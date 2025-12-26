@@ -1,0 +1,74 @@
+{
+  "task": "detection",
+  "n_samples": 1,
+  "n_processed": 1,
+  "n_errors": 0,
+  "config": {
+    "aggregation": {
+      "n_bootstrap": 10,
+      "seed": 0
+    },
+    "columns": {
+      "prediction": "prediction",
+      "target": "target"
+    },
+    "metrics": {
+      "include_froc": false,
+      "iou_thresholds": [
+        0.5
+      ],
+      "use_3d": true
+    },
+    "task": "detection"
+  },
+  "metrics": {
+    "iou_mean": {
+      "mean": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 1.0,
+      "iqr": [
+        1.0,
+        1.0
+      ]
+    },
+    "mAP@0.50": {
+      "mean": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 1.0,
+      "iqr": [
+        1.0,
+        1.0
+      ]
+    },
+    "precision": {
+      "mean": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 1.0,
+      "iqr": [
+        1.0,
+        1.0
+      ]
+    },
+    "recall": {
+      "mean": 1.0,
+      "ci_lower": 1.0,
+      "ci_upper": 1.0,
+      "n_finite": 1,
+      "std": 0.0,
+      "median": 1.0,
+      "iqr": [
+        1.0,
+        1.0
+      ]
+    }
+  }
+}

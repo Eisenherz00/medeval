@@ -91,6 +91,7 @@ def auroc(
     multi_class: Literal["ovr", "ovo"] = "ovr",
     compute_ci: bool = False,
     confidence: float = 0.95,
+    n_bootstrap: int = 1000,
     seed: Optional[int] = None,
 ) -> Union[float, Tuple[float, float, float]]:
     """
@@ -165,25 +166,60 @@ def auroc(
             auroc_score = 0.0
 
     if compute_ci:
+        # Binary: use DeLong's method when available; otherwise bootstrap resampling.
         if pred.ndim == 1 or pred.shape[1] == 1:
-            # Binary: use DeLong's method
             if norm is None:
-                # Fallback to bootstrap
-                scores = np.array([auroc_score])
-                _, lower, upper = bootstrap_ci(scores, confidence, n_bootstrap=1000, seed=seed)
+                rng = np.random.default_rng(seed)
+                n = len(target)
+                if n == 0:
+                    return float(auroc_score), float("nan"), float("nan")
+                boot = []
+                for _ in range(n_bootstrap):
+                    idx = rng.integers(0, n, size=n)
+                    try:
+                        boot.append(roc_auc_score(target[idx], pred[idx]))
+                    except Exception:
+                        boot.append(float("nan"))
+                boot = np.asarray(boot, dtype=float)
+                boot = boot[np.isfinite(boot)]
+                if boot.size == 0:
+                    return float(auroc_score), float("nan"), float("nan")
+                alpha = 1.0 - confidence
+                lower = float(np.percentile(boot, 100 * (alpha / 2)))
+                upper = float(np.percentile(boot, 100 * (1 - alpha / 2)))
             else:
                 variance = _delong_auc_variance(target, pred)
                 std_error = np.sqrt(variance)
                 z_critical = norm.ppf(1 - (1 - confidence) / 2)
-                lower = auroc_score - z_critical * std_error
-                upper = auroc_score + z_critical * std_error
-                lower = max(0.0, lower)
-                upper = min(1.0, upper)
+                lower = float(max(0.0, auroc_score - z_critical * std_error))
+                upper = float(min(1.0, auroc_score + z_critical * std_error))
         else:
-            # Multi-class: use bootstrap
-            # This is a simplified approach - for proper multi-class CI, need more complex bootstrap
-            scores = np.array([auroc_score])
-            _, lower, upper = bootstrap_ci(scores, confidence, n_bootstrap=1000, seed=seed)
+            # Multi-class: bootstrap resampling over samples.
+            rng = np.random.default_rng(seed)
+            n = len(target)
+            if n == 0:
+                return float(auroc_score), float("nan"), float("nan")
+            boot = []
+            for _ in range(n_bootstrap):
+                idx = rng.integers(0, n, size=n)
+                try:
+                    boot.append(
+                        roc_auc_score(
+                            target[idx],
+                            pred[idx],
+                            average=average,
+                            multi_class=multi_class,
+                        )
+                    )
+                except Exception:
+                    boot.append(float("nan"))
+            boot = np.asarray(boot, dtype=float)
+            boot = boot[np.isfinite(boot)]
+            if boot.size == 0:
+                return float(auroc_score), float("nan"), float("nan")
+            alpha = 1.0 - confidence
+            lower = float(np.percentile(boot, 100 * (alpha / 2)))
+            upper = float(np.percentile(boot, 100 * (1 - alpha / 2)))
 
         return float(auroc_score), float(lower), float(upper)
 
@@ -278,8 +314,28 @@ def auprc(
             auprc_score = 0.0
 
     if compute_ci:
-        scores = np.array([auprc_score])
-        _, lower, upper = bootstrap_ci(scores, confidence, n_bootstrap=n_bootstrap, seed=seed)
+        # Bootstrap resampling over samples (not over a single scalar).
+        rng = np.random.default_rng(seed)
+        n = len(target)
+        if n == 0:
+            return float(auprc_score), float("nan"), float("nan")
+
+        boot = []
+        for _ in range(n_bootstrap):
+            idx = rng.integers(0, n, size=n)
+            try:
+                boot.append(auprc(pred[idx], target[idx], average=average, compute_ci=False))
+            except Exception:
+                boot.append(float("nan"))
+
+        boot = np.asarray(boot, dtype=float)
+        boot = boot[np.isfinite(boot)]
+        if boot.size == 0:
+            return float(auprc_score), float("nan"), float("nan")
+
+        alpha = 1.0 - confidence
+        lower = float(np.percentile(boot, 100 * (alpha / 2)))
+        upper = float(np.percentile(boot, 100 * (1 - alpha / 2)))
         return float(auprc_score), float(lower), float(upper)
 
     return float(auprc_score)

@@ -1,0 +1,28 @@
+task: detection
+manifest: demo_external_user/out_cli_detection/manifest.csv
+columns:
+  prediction: prediction
+  target: target
+  spacing: spacing
+  patient_id: patient_id
+  strata: strata
+metrics:
+  include_froc: false
+  iou_thresholds:
+  - 0.5
+  - 0.75
+  use_3d: true
+aggregation:
+  method: mean
+  ci_method: bootstrap
+  confidence: 0.95
+  n_bootstrap: 50
+  seed: 42
+environment:
+  medeval_version: 0.1.5
+  python_version: 3.9.6
+  torch_version: !!python/object/new:torch.torch_version.TorchVersion
+  - 2.8.0
+  numpy_version: 2.0.2
+  platform: macOS-15.7.2-arm64-arm-64bit
+  git_commit: 226bfd4e6cbc

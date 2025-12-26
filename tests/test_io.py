@@ -31,6 +31,12 @@ def test_nifti_spacing_roundtrip():
         # Save with spacing
         save_nifti(data, str(nifti_path), spacing=spacing, origin=origin)
 
+        # Verify the NIfTI header zooms are physically correct for nibabel:
+        # nibabel header zooms are (dx, dy, dz) in (X,Y,Z) axis order.
+        nii = nib.load(str(nifti_path))
+        header_zooms = nii.header.get_zooms()[:3]
+        assert np.allclose(header_zooms, (spacing[2], spacing[1], spacing[0]), rtol=1e-5)
+
         # Load and check spacing
         loaded_spacing = get_nifti_spacing(str(nifti_path))
 
@@ -83,6 +89,12 @@ def test_nifti_2d_3d_support():
         save_nifti(data_2d, str(path_2d), spacing=spacing_2d)
         loaded_2d = load_nifti(str(path_2d), as_torch=False)
         assert loaded_2d.shape == data_2d.shape
+
+        # Verify 2D header zooms are (dx, dy) and get_nifti_spacing returns (dy, dx)
+        nii2 = nib.load(str(path_2d))
+        header_zooms_2d = nii2.header.get_zooms()[:2]
+        assert np.allclose(header_zooms_2d, (spacing_2d[1], spacing_2d[0]), rtol=1e-5)
+        assert np.allclose(get_nifti_spacing(str(path_2d)), spacing_2d, rtol=1e-5)
 
 
 def test_load_nifti_as_torch():

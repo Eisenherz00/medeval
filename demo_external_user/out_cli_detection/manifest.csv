@@ -1,0 +1,2 @@
+prediction,target
+demo_external_user/out_cli_detection/pred.npy,demo_external_user/out_cli_detection/gt.npy

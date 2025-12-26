@@ -1,0 +1,12 @@
+aggregation:
+  n_bootstrap: 10
+  seed: 0
+columns:
+  prediction: prediction
+  target: target
+metrics:
+  include_froc: false
+  iou_thresholds:
+  - 0.5
+  use_3d: true
+task: detection

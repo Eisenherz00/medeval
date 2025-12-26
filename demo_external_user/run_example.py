@@ -22,7 +22,7 @@ REPO_ROOT = DEMO_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 # medeval imports
-from medeval.core.io import load_image
+from medeval.core.io import get_spacing_from_header, load_image
 from medeval.core.typing import as_tensor
 from medeval.metrics.segmentation import compute_segmentation_metrics
 from medeval.metrics.classification import (
@@ -64,8 +64,9 @@ def run_segmentation_workflow():
     print(f"  Cases: {len(df)}")
 
     # Support both legacy and current manifest column names
-    pred_col = "pred_path" if "pred_path" in df.columns else "prediction"
-    tgt_col = "target_path" if "target_path" in df.columns else "target"
+    pred_col = "prediction" if "prediction" in df.columns else "pred_path"
+    tgt_col = "target" if "target" in df.columns else "target_path"
+    spacing_col = "spacing" if "spacing" in df.columns else None
 
     missing = [c for c in (pred_col, tgt_col) if c not in df.columns]
     if missing:
@@ -93,8 +94,15 @@ def run_segmentation_workflow():
         pred = load_image(str(pred_path), as_torch=True)
         target = load_image(str(target_path), as_torch=True)
 
-        # Demo convention: fixed anisotropic spacing (dz, dy, dx)
-        spacing = (3.0, 1.0, 1.0)
+        # Resolve spacing (prefer manifest column; fallback to header)
+        spacing = None
+        if spacing_col is not None and spacing_col in row and pd.notna(row[spacing_col]):
+            spacing = tuple(map(float, str(row[spacing_col]).split(",")))
+        else:
+            try:
+                spacing = get_spacing_from_header(str(pred_path))
+            except Exception:
+                spacing = (3.0, 1.0, 1.0)  # fallback
 
         if idx < 3:
             print(f"  Pred shape: {tuple(pred.shape)}")

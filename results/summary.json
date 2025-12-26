@@ -1,0 +1,8 @@
+{
+  "task": "segmentation",
+  "n_samples": 1,
+  "n_processed": 0,
+  "n_errors": 1,
+  "config": {},
+  "metrics": {}
+}
